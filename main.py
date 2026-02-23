@@ -786,7 +786,7 @@ async def buy_sub(callback: types.CallbackQuery):
 
 async def main():
     await init_db()
-    print("Bot ishga tushdi...")
+    print("Bot ishga tushdssi...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
