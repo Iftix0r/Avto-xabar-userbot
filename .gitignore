@@ -1,0 +1,33 @@
+# Environment variables (maxfiy ma'lumotlar)
+.env
+
+# Log fayllar
+*.log
+bot.log
+
+# Session fayllar
+sessions/
+*.session
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.pyc
+
+# Virtual environment
+venv/
+env/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
