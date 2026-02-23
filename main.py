@@ -98,15 +98,32 @@ async def admin_users_list(callback: types.CallbackQuery):
 # --- Userbot Ulash ---
 @dp.message(F.text == "📱 Akkountga ulanish")
 async def prompt_phone(message: types.Message, state: FSMContext):
-    await message.answer("Telefon raqamingizni xalqaro formatda kiriting:\n(Masalan: `+998901234567`)", parse_mode="Markdown")
+    kb = ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="📞 Raqamni yuborish", request_contact=True)]],
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
+    await message.answer(
+        "Tugmani bosish orqali raqamingizni yuboring yoki qo'lda kiriting:\n(Masalan: `+998901234567`)",
+        reply_markup=kb,
+        parse_mode="Markdown"
+    )
     await state.set_state(AuthState.phone)
 
 @dp.message(AuthState.phone)
 async def process_phone(message: types.Message, state: FSMContext):
-    phone = message.text.replace(" ", "")
-    user_id = message.from_user.id
+    if message.contact:
+        phone = message.contact.phone_number
+        if not phone.startswith("+"):
+            phone = "+" + phone
+    else:
+        phone = message.text.replace(" ", "")
     
+    user_id = message.from_user.id
     session_path = f"sessions/sess_{user_id}"
+    
+    # Oldingi ReplyKeyboardni o'chirish
+    await message.answer("Tekshirilmoqda...", reply_markup=types.ReplyKeyboardRemove())
     client = TelegramClient(session_path, API_ID, API_HASH)
     
     try:
@@ -123,9 +140,11 @@ async def process_phone(message: types.Message, state: FSMContext):
         }
         
         await message.answer(
-            "📩 Tasdiqlash kodi yuborildi.\n\n"
-            "Iltimos, kodni va agar parolingiz (2FA) bo'lsa parolni vergul bilan ajratib yuboring.\n"
-            "Format: `kod,parol` yoki faqat `kod`",
+            "📩 **Tasdiqlash kodi yuborildi.**\n\n"
+            "⚠️ **DIQQAT:**\n"
+            "1. Kodni shunchaki raqamlar ko'rinishida yuboring (masalan: `80742`).\n"
+            "2. Agar sizda **Ikki bosqichli parol (2FA)** bo'lsa, kod va parolni vergul bilan ajratib yuboring (masalan: `80742,parolingiz`).\n\n"
+            "Kodni yuboring:",
             parse_mode="Markdown"
         )
         await state.set_state(AuthState.code_pass)
@@ -137,9 +156,31 @@ async def process_phone(message: types.Message, state: FSMContext):
 @dp.message(AuthState.code_pass)
 async def process_code_pass(message: types.Message, state: FSMContext):
     # Foydalanuvchi kiritgan matnni tahlil qilish
-    text = message.text.split(",")
-    code = text[0].strip()
-    provided_password = text[1].strip() if len(text) > 1 else None
+    input_text = message.text.strip()
+    
+    # Agar foydalanuvchi kodni oralariga vergul qo'yib yuborgan bo'lsa (masalan: 1,2,3,4,5)
+    # Uni bitta kodga aylantiramiz
+    if "," in input_text:
+        parts = [p.strip() for p in input_text.split(",")]
+        # Agar barcha qismlar raqam bo'lsa va uzunligi 1 bo'lsa (masalan: 8,0,7,4,2)
+        if all(len(p) == 1 and p.isdigit() for p in parts):
+            code = "".join(parts)
+            provided_password = None
+        # Agar faqat bitta vergul bo'lsa: kod,parol
+        elif len(parts) == 2:
+            code = parts[0]
+            provided_password = parts[1]
+        # Boshqa holatlarda (masalan: 8,0,7,4,2,parol)
+        else:
+            # Iloji boricha raqamlarni biriktiramiz, oxirgi qismini parol deb olamiz
+            code_parts = []
+            provided_password = parts[-1]
+            for p in parts[:-1]:
+                code_parts.append(p)
+            code = "".join(code_parts)
+    else:
+        code = input_text
+        provided_password = None
     
     user_id = message.from_user.id
     if user_id not in users_data:
