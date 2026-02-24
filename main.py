@@ -234,6 +234,15 @@ def get_interval_keyboard():
 @dp.message(Command("start"))
 async def start_handler(message: types.Message):
     user_id = message.from_user.id
+    
+    # Admin tekshirish
+    is_admin_user = await is_admin(user_id)
+    
+    # Admin'lar uchun to'g'ridan-to'g'ri admin panel
+    if is_admin_user:
+        await message.answer("👑 **Admin Boshqaruv Paneli**", reply_markup=get_main_keyboard(user_id, is_connected=True), parse_mode="Markdown")
+        return
+    
     client = await get_user_client(user_id)
     
     if not client:
@@ -242,6 +251,7 @@ async def start_handler(message: types.Message):
             reply_markup=get_main_keyboard(user_id, is_connected=False)
         )
     else:
+        # Obuna bo'lgan foydalanuvchi
         if await check_subscription(user_id):
             await message.answer("🏠 **Asosiy boshqaruv paneli:**", reply_markup=get_main_keyboard(user_id, is_connected=True), parse_mode="Markdown")
         else:
@@ -462,8 +472,9 @@ async def cancel_payment(callback: types.CallbackQuery, state: FSMContext):
 async def show_profiles(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     
-    # Obuna tekshirish
-    if not await check_subscription(user_id):
+    # Obuna tekshirish (admin'lar uchun o'tkazib yuborish)
+    is_admin_user = await is_admin(user_id)
+    if not is_admin_user and not await check_subscription(user_id):
         await callback.answer("❌ Bu xizmat faqat obuna bo'lgan foydalanuvchilar uchun!", show_alert=True)
         return await send_sub_msg(callback.message)
     
@@ -514,8 +525,9 @@ async def process_add_profile(message: types.Message, state: FSMContext):
 async def show_groups(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     
-    # Obuna tekshirish
-    if not await check_subscription(user_id):
+    # Obuna tekshirish (admin'lar uchun o'tkazib yuborish)
+    is_admin_user = await is_admin(user_id)
+    if not is_admin_user and not await check_subscription(user_id):
         await callback.answer("❌ Bu xizmat faqat obuna bo'lgan foydalanuvchilar uchun!", show_alert=True)
         return await send_sub_msg(callback.message)
     
@@ -759,15 +771,22 @@ async def show_admin_panel(message: types.Message):
         [InlineKeyboardButton(text="💰 Narxlarni sozlash", callback_data="admin_pricing")],
         [InlineKeyboardButton(text="📢 Xabar yuborish", callback_data="admin_broadcast")],
         [InlineKeyboardButton(text="👨‍💼 Admin qo'shish", callback_data="admin_add_admin")],
-        [InlineKeyboardButton(text="👥 Admin ro'yxati", callback_data="admin_list_admins")]
+        [InlineKeyboardButton(text="👥 Admin ro'yxati", callback_data="admin_list_admins")],
+        [InlineKeyboardButton(text="📱 Akkauntga ulanish", callback_data="admin_connect_account")]
     ])
     await message.answer("👑 **Admin Boshqaruv Paneli**", reply_markup=kb)
 
 @dp.callback_query(F.data == "main_admin")
 async def admin_panel(callback: types.CallbackQuery):
-    if not await is_admin(callback.from_user.id):
+    user_id = callback.from_user.id
+    
+    # Admin tekshirish
+    is_admin_user = await is_admin(user_id)
+    
+    if not is_admin_user:
         await callback.answer("❌ Siz admin emassiz!", show_alert=True)
         return
+    
     await show_admin_panel(callback.message)
     await callback.answer()
 
@@ -1155,3 +1174,14 @@ async def process_remove_admin(message: types.Message, state: FSMContext):
     await state.clear()
 
 # --- Admin Tekshirish (boshida ta'riflanadi) ---
+
+
+# --- Admin Akkaunt Ulash ---
+@dp.callback_query(F.data == "admin_connect_account")
+async def admin_connect_account(callback: types.CallbackQuery, state: FSMContext):
+    if not await is_admin(callback.from_user.id):
+        await callback.answer("❌ Siz admin emassiz!", show_alert=True)
+        return
+    
+    await prompt_phone(callback.message, state)
+    await callback.answer()
