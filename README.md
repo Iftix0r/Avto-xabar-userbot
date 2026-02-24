@@ -3,8 +3,8 @@
 ## 🎯 Xususiyatlari
 
 ### 👤 Foydalanuvchi Imkoniyatlari
-- **Profillar** - Bir nechta Telegram akkauntlarini qo'shish va boshqarish
-- **Guruhlar** - Guruhlarni folderlar bo'yicha tashkil etish
+- **Profillar** - Bir nechta Telegram akkauntlarini qo'shish va boshqarish (faqat obuna bo'lganlar uchun)
+- **Guruhlar** - Guruhlarni folderlar bo'yicha tashkil etish (faqat obuna bo'lganlar uchun)
 - **Reklama Matni** - Avtomatik yuborish uchun xabar matni sozlash
 - **Rasm Yuborish** - Pro rejada rasm bilan reklama yuborish
 - **Interval** - 1 minutdan boshlab istalgan vaqt oralig'ini sozlash
@@ -20,6 +20,8 @@
 2. Chekni rasm sifatida yuborish
 3. Admin tasdiqlashi kutish
 4. Obuna faollashtirilish
+
+**Admin narxlarni o'zgartirishi mumkin!**
 
 ### 👨‍💻 Admin Paneli
 - **Statistika** - Jami foydalanuvchilar va faol senderlar

@@ -157,6 +157,15 @@ async def check_subscription(user_id: int):
                 return expiry_date > datetime.now()
     return False
 
+# --- Admin Tekshirish ---
+async def is_admin(user_id: int) -> bool:
+    if user_id == ADMIN_ID:
+        return True
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT admin_id FROM admins WHERE admin_id = ?", (user_id,)) as cursor:
+            result = await cursor.fetchone()
+    return result is not None
+
 # --- Klaviaturalar ---
 def get_main_keyboard(user_id, is_connected=False):
     if not is_connected:
@@ -167,10 +176,9 @@ def get_main_keyboard(user_id, is_connected=False):
         [InlineKeyboardButton(text="💬 Xabar matni", callback_data="main_xabar"), InlineKeyboardButton(text="📋 Guruhlar", callback_data="main_groups")],
         [InlineKeyboardButton(text="▶️ Ishga tushirish", callback_data="main_start_sender"), InlineKeyboardButton(text="⏱ Interval", callback_data="main_interval")],
         [InlineKeyboardButton(text="⭐ Pro status", callback_data="main_pro")],
-        [InlineKeyboardButton(text="👤 Profil", callback_data="main_profile"), InlineKeyboardButton(text="⚙️ Sozlamalar", callback_data="main_settings")]
+        [InlineKeyboardButton(text="👤 Profil", callback_data="main_profile"), InlineKeyboardButton(text="⚙️ Sozlamalar", callback_data="main_settings")],
+        [InlineKeyboardButton(text="👨‍💻 Admin Panel", callback_data="main_admin")]
     ]
-    if user_id == ADMIN_ID:
-        kb.append([InlineKeyboardButton(text="👨‍💻 Admin Panel", callback_data="main_admin")])
     
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
@@ -919,13 +927,6 @@ async def process_broadcast(message: types.Message, state: FSMContext):
     await state.clear()
 
 # --- Admin Narx Sozlash ---
-async def is_admin(user_id: int):
-    if user_id == ADMIN_ID:
-        return True
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT admin_id FROM admins WHERE admin_id = ?", (user_id,)) as cursor:
-            return await cursor.fetchone() is not None
-
 @dp.callback_query(F.data == "admin_pricing")
 async def admin_pricing(callback: types.CallbackQuery):
     if not await is_admin(callback.from_user.id):
@@ -1045,7 +1046,8 @@ async def show_stats(callback: types.CallbackQuery):
 # --- Admin Qo'shish ---
 @dp.callback_query(F.data == "admin_add_admin")
 async def add_admin_prompt(callback: types.CallbackQuery, state: FSMContext):
-    if callback.from_user.id != ADMIN_ID:
+    if not await is_admin(callback.from_user.id):
+        await callback.answer("❌ Siz admin emassiz!", show_alert=True)
         return
     
     await callback.message.answer("👨‍💼 **Yangi admin qo'shish**\n\nAdmin ID raqamini kiriting:")
@@ -1054,7 +1056,7 @@ async def add_admin_prompt(callback: types.CallbackQuery, state: FSMContext):
 
 @dp.message(AuthState.add_admin_id)
 async def process_add_admin(message: types.Message, state: FSMContext):
-    if message.from_user.id != ADMIN_ID:
+    if not await is_admin(message.from_user.id):
         return
     
     try:
@@ -1092,7 +1094,8 @@ async def process_add_admin(message: types.Message, state: FSMContext):
 
 @dp.callback_query(F.data == "admin_list_admins")
 async def list_admins(callback: types.CallbackQuery):
-    if callback.from_user.id != ADMIN_ID:
+    if not await is_admin(callback.from_user.id):
+        await callback.answer("❌ Siz admin emassiz!", show_alert=True)
         return
     
     async with aiosqlite.connect(DB_PATH) as db:
@@ -1120,7 +1123,8 @@ async def list_admins(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data == "admin_remove_admin")
 async def remove_admin_prompt(callback: types.CallbackQuery, state: FSMContext):
-    if callback.from_user.id != ADMIN_ID:
+    if not await is_admin(callback.from_user.id):
+        await callback.answer("❌ Siz admin emassiz!", show_alert=True)
         return
     
     await callback.message.answer("🗑 **Admin o'chirish**\n\nO'chirilishi kerak bo'lgan admin ID'sini kiriting:")
@@ -1129,7 +1133,7 @@ async def remove_admin_prompt(callback: types.CallbackQuery, state: FSMContext):
 
 @dp.message(AuthState.add_admin_id)
 async def process_remove_admin(message: types.Message, state: FSMContext):
-    if message.from_user.id != ADMIN_ID:
+    if not await is_admin(message.from_user.id):
         return
     
     try:
@@ -1150,13 +1154,4 @@ async def process_remove_admin(message: types.Message, state: FSMContext):
     await message.answer(f"✅ Admin `{remove_admin_id}` o'chirildi!", parse_mode="Markdown")
     await state.clear()
 
-# Admin tekshirish funksiyasi
-async def is_admin(user_id: int) -> bool:
-    if user_id == ADMIN_ID:
-        return True
-    
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT admin_id FROM admins WHERE admin_id = ?", (user_id,)) as cursor:
-            result = await cursor.fetchone()
-    
-    return result is not None
+# --- Admin Tekshirish (boshida ta'riflanadi) ---
