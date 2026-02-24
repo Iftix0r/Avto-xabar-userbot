@@ -26,6 +26,7 @@
 - **Foydalanuvchilar Ro'yxati** - Barcha foydalanuvchilar va ularning obunalari
 - **Qidirish** - ID orqali foydalanuvchini topish
 - **Obuna Uzaytirish** - Foydalanuvchiga obuna berish yoki uzaytirish
+- **Narxlarni Sozlash** - Har bir obuna rejasining narxini o'zgartirish
 - **Xabar Yuborish** - Barcha foydalanuvchilarga xabar yuborish
 - **To'lov Tasdiqlash** - Foydalanuvchi to'lovlarini tasdiqlash yoki rad etish
 
