@@ -1,69 +1,136 @@
-# 🚀 Telegram Multi-User Ads Bot (Userbot)
+# Avto Habar Bot - Telegram Reklama Yuborish Tizimi
 
-Ushbu loyiha Telegram akauntlari orqali guruhlarga avtomatik tarzda reklama matnlarini tarqatuvchi kuchli va qulay UserBot tizimidir. Bot `Aiogram 3` va `Telethon` kutubxonalari asosida yaratilgan.
+## 🎯 Xususiyatlari
 
-## ✨ Imkoniyatlar
+### 👤 Foydalanuvchi Imkoniyatlari
+- **Profillar** - Bir nechta Telegram akkauntlarini qo'shish va boshqarish
+- **Guruhlar** - Guruhlarni folderlar bo'yicha tashkil etish
+- **Reklama Matni** - Avtomatik yuborish uchun xabar matni sozlash
+- **Rasm Yuborish** - Pro rejada rasm bilan reklama yuborish
+- **Interval** - 1 minutdan boshlab istalgan vaqt oralig'ini sozlash
+- **Avtomatik Yuborish** - Tanlangan guruhlardan guruhlarga avtomatik xabar yuborish
 
-- 👥 **Ko'p foydalanuvchilik tizim:** Bir vaqtning o'zida bir nechta foydalanuvchi o'z akauntini ulay oladi.
-- 👨‍💻 **Admin Panel:** Jami foydalanuvchilar va faol userbotlar statistikasini kuzatish.
-- 📱 **Oson ulanish:** Bot orqali telefon raqami va kod yuborish orqali profilga ulanish.
-- 🔐 **2FA Qo'llab-quvvatlash:** Ikki bosqichli tasdiqlash paroli mavjud akauntlarni ham ulay oladi.
-- 📢 **Avtomatik Sender:** Ma'lum bir vaqt oralig'ida (interval) avtomatik xabar yuborish.
-- ⚙️ **Shaxsiy Sozlamalar:** Har bir foydalanuvchi o'z reklama matni va yuborish oralig'ini o'zi sozlaydi.
-- 📁 **Xavfsiz Sessiyalar:** Sessiya fayllari alohida `sessions/` papkasida tartibli saqlanadi.
+### 💳 To'lov Tizimi
+- **Start** - 1 oy (50,000 so'm)
+- **Pro** - 3 oy (120,000 so'm), 6 oy (200,000 so'm)
+- **VIP** - 1 yil (350,000 so'm), Umrbod (500,000 so'm)
 
-## 🛠 Texnologiyalar
+**To'lov jarayoni:**
+1. Obuna turini tanlash
+2. Chekni rasm sifatida yuborish
+3. Admin tasdiqlashi kutish
+4. Obuna faollashtirilish
 
-- **Python 3.10+**
-- **Aiogram 3** (Bot interfeysi uchun)
-- **Telethon** (Userbot funksiyasi uchun)
-- **Python-dotenv** (Konfiguratsiya uchun)
+### 👨‍💻 Admin Paneli
+- **Statistika** - Jami foydalanuvchilar va faol senderlar
+- **Foydalanuvchilar Ro'yxati** - Barcha foydalanuvchilar va ularning obunalari
+- **Qidirish** - ID orqali foydalanuvchini topish
+- **Obuna Uzaytirish** - Foydalanuvchiga obuna berish yoki uzaytirish
+- **Xabar Yuborish** - Barcha foydalanuvchilarga xabar yuborish
+- **To'lov Tasdiqlash** - Foydalanuvchi to'lovlarini tasdiqlash yoki rad etish
 
 ## 🚀 O'rnatish
 
-1. Loyihani yuklab oling:
+### Talablar
+- Python 3.8+
+- Telegram Bot Token
+- Telegram API ID va API Hash
+
+### Qadamlar
+
+1. **Repozitoriyani klonlash**
 ```bash
-git clone https://github.com/Iftix0r/Avto-xabar-userbot.git
-cd Avto-xabar-userbot
+git clone <repo-url>
+cd bot
 ```
 
-2. Virtual muhitni yarating va faollashtiring:
+2. **Virtual muhitni yaratish**
 ```bash
 python -m venv venv
-source venv/bin/activate  # Linux/macOS
+source venv/bin/activate  # Linux/Mac
 # yoki
 venv\Scripts\activate  # Windows
 ```
 
-3. Kerakli kutubxonalarni o'rnating:
+3. **Kutubxonalarni o'rnatish**
 ```bash
 pip install -r requirements.txt
 ```
 
-4. `.env` faylini yarating va quyidagi ma'lumotlarni kiriting:
-```env
-BOT_TOKEN=Sizning_Bot_Tokeningiz
-API_ID=Sizning_API_IDingiz
-API_HASH=Sizning_API_Hashlingiz
-ADMIN_ID=Sizning_IDingiz
+4. **.env faylini yaratish**
+```
+BOT_TOKEN=your_bot_token
+API_ID=your_api_id
+API_HASH=your_api_hash
+ADMIN_ID=your_admin_id
 AD_DELAY=3600
 ```
 
-## 📖 Foydalanish
+5. **Botni ishga tushirish**
+```bash
+python main.py
+```
 
-1. Botni ishga tushiring: `python main.py`
-2. Botga `/start` buyrug'ini yuboring.
-3. "📱 Akkountga ulanish" tugmasini bosing va raqamingizni kiriting.
-4. Telegram'dan kelgan kodni yozing (agar 2FA bo'lsa `kod,parol` ko'rinishida).
-5. Reklama matni va vaqtni sozlab, "🚀 Ishni boshlash" tugmasini bosing.
+## 📋 Foydalanish
 
-## ⚠️ Ogohlantirish
+### Foydalanuvchi uchun
+1. `/start` - Botni ishga tushirish
+2. "📱 Akkountga ulanish" - Telegram akkauntini ulash
+3. "👥 Profillar" - Qo'shimcha profillar qo'shish
+4. "📋 Guruhlar" - Guruhlarni folderlar bo'yicha tashkil etish
+5. "💬 Xabar matni" - Reklama matnini kiritish
+6. "⏱ Interval" - Yuborish vaqt oralig'ini sozlash
+7. "▶️ Ishga tushirish" - Avtomatik yuborishni boshlash
 
-Ushbu bot faqat tanishuv va yaxshi maqsadlar uchun ishlab chiqilgan. Telegram qoidalariga ko'ra, juda ko'p guruhlarga spam xabarlar yuborish akkauntingiz bloklanishiga (spam-block) olib kelishi mumkin. Muallif har qanday blok holatiga mas'uliyatni o'z zimmasiga olmaydi.
+### Admin uchun
+1. `/addsub <user_id> <kun>` - Foydalanuvchiga obuna berish
+2. Admin Panel → Qidirish → Foydalanuvchini boshqarish
+3. Admin Panel → To'lov Tasdiqlash → Foydalanuvchi to'lovlarini tasdiqlash
 
-## 🤝 Aloqa
+## 📁 Fayl Tuzilishi
 
-Agar savollaringiz bo'lsa, @Iftix0r` ga murojaat qilishingiz mumkin.
+```
+.
+├── main.py              # Asosiy bot kodi
+├── requirements.txt     # Python kutubxonalari
+├── .env                 # Muhit o'zgaruvchilari
+├── bot_database.db      # SQLite ma'lumotlar bazasi
+├── sessions/            # Telegram sessiyalari
+├── payments/            # To'lov cheklari
+└── README.md            # Bu fayl
+```
 
----
-⭐ Agar loyiha sizga yoqqan bo'lsa, **Star** berishni unutmang!
+## 🗄️ Ma'lumotlar Bazasi
+
+### Jadvallar
+- **subscriptions** - Foydalanuvchi obunalari
+- **profiles** - Foydalanuvchi profillar
+- **groups** - Guruh folderlar
+- **payment_requests** - To'lov so'rovlari
+- **ad_templates** - Reklama shablonlari
+
+## ⚙️ Konfiguratsiya
+
+### .env Fayli
+```
+BOT_TOKEN=123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11
+API_ID=123456
+API_HASH=abcdef1234567890abcdef1234567890
+ADMIN_ID=123456789
+AD_DELAY=3600
+```
+
+## 🔒 Xavfsizlik
+
+- Sessiyalar `sessions/` papkasida saqlanadi
+- To'lov cheklari `payments/` papkasida saqlanadi
+- Admin ID orqali admin huquqlari tekshiriladi
+- Obuna muddati avtomatik tekshiriladi
+
+## 📞 Qo'llab-quvvatlash
+
+Muammolar yoki savollar bo'lsa, admin bilan bog'laning.
+
+## 📝 Litsenziya
+
+Bu loyiha shaxsiy foydalanish uchun.
