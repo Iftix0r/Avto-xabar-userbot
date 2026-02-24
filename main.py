@@ -44,6 +44,7 @@ class AuthState(StatesGroup):
     add_profile_phone = State()
     add_group_name = State()
     add_group_ids = State()
+    add_admin_id = State()
 
 # --- Ma'lumotlar bazasi ---
 async def init_db():
@@ -95,6 +96,16 @@ async def init_db():
                 user_id INTEGER,
                 text TEXT,
                 image_path TEXT,
+                created_at TEXT
+            )
+        """)
+        
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS admins (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                admin_id INTEGER UNIQUE,
+                username TEXT,
+                added_by INTEGER,
                 created_at TEXT
             )
         """)
@@ -697,20 +708,24 @@ async def show_admin_panel(message: types.Message):
         [InlineKeyboardButton(text="👥 Foydalanuvchilar", callback_data="admin_users_list")],
         [InlineKeyboardButton(text="🔍 Qidirish", callback_data="admin_search")],
         [InlineKeyboardButton(text="⏰ Obuna uzaytirish", callback_data="admin_extend")],
-        [InlineKeyboardButton(text="📢 Xabar yuborish", callback_data="admin_broadcast")]
+        [InlineKeyboardButton(text="📢 Xabar yuborish", callback_data="admin_broadcast")],
+        [InlineKeyboardButton(text="👨‍💼 Admin qo'shish", callback_data="admin_add_admin")],
+        [InlineKeyboardButton(text="👥 Admin ro'yxati", callback_data="admin_list_admins")]
     ])
     await message.answer("👑 **Admin Boshqaruv Paneli**", reply_markup=kb)
 
 @dp.callback_query(F.data == "main_admin")
 async def admin_panel(callback: types.CallbackQuery):
-    if callback.from_user.id != ADMIN_ID:
+    if not await is_admin(callback.from_user.id):
+        await callback.answer("❌ Siz admin emassiz!", show_alert=True)
         return
     await show_admin_panel(callback.message)
     await callback.answer()
 
 @dp.callback_query(F.data == "admin_stats")
 async def admin_stats(callback: types.CallbackQuery):
-    if callback.from_user.id != ADMIN_ID:
+    if not await is_admin(callback.from_user.id):
+        await callback.answer("❌ Siz admin emassiz!", show_alert=True)
         return
     
     total_users = len(users_data)
@@ -727,7 +742,8 @@ async def admin_stats(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data == "admin_users_list")
 async def admin_users_list(callback: types.CallbackQuery):
-    if callback.from_user.id != ADMIN_ID:
+    if not await is_admin(callback.from_user.id):
+        await callback.answer("❌ Siz admin emassiz!", show_alert=True)
         return
     
     async with aiosqlite.connect(DB_PATH) as db:
@@ -747,7 +763,8 @@ async def admin_users_list(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data == "admin_search")
 async def admin_search(callback: types.CallbackQuery, state: FSMContext):
-    if callback.from_user.id != ADMIN_ID:
+    if not await is_admin(callback.from_user.id):
+        await callback.answer("❌ Siz admin emassiz!", show_alert=True)
         return
     await callback.message.answer("🔍 Foydalanuvchi ID'sini kiriting:")
     await state.set_state(AuthState.admin_search_user)
@@ -755,7 +772,7 @@ async def admin_search(callback: types.CallbackQuery, state: FSMContext):
 
 @dp.message(AuthState.admin_search_user)
 async def process_admin_search(message: types.Message, state: FSMContext):
-    if message.from_user.id != ADMIN_ID:
+    if not await is_admin(message.from_user.id):
         return
     
     try:
@@ -788,7 +805,8 @@ async def process_admin_search(message: types.Message, state: FSMContext):
 
 @dp.callback_query(F.data.startswith("admin_extend_user_"))
 async def admin_extend_user(callback: types.CallbackQuery, state: FSMContext):
-    if callback.from_user.id != ADMIN_ID:
+    if not await is_admin(callback.from_user.id):
+        await callback.answer("❌ Siz admin emassiz!", show_alert=True)
         return
     
     user_id = int(callback.data.split("_")[-1])
@@ -806,7 +824,8 @@ async def admin_extend_user(callback: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data.startswith("extend_days_"))
 async def extend_days(callback: types.CallbackQuery, state: FSMContext):
-    if callback.from_user.id != ADMIN_ID:
+    if not await is_admin(callback.from_user.id):
+        await callback.answer("❌ Siz admin emassiz!", show_alert=True)
         return
     
     data = await state.get_data()
@@ -820,7 +839,8 @@ async def extend_days(callback: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data.startswith("admin_remove_sub_"))
 async def admin_remove_sub(callback: types.CallbackQuery):
-    if callback.from_user.id != ADMIN_ID:
+    if not await is_admin(callback.from_user.id):
+        await callback.answer("❌ Siz admin emassiz!", show_alert=True)
         return
     
     user_id = int(callback.data.split("_")[-1])
@@ -833,7 +853,8 @@ async def admin_remove_sub(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data == "admin_broadcast")
 async def admin_broadcast(callback: types.CallbackQuery, state: FSMContext):
-    if callback.from_user.id != ADMIN_ID:
+    if not await is_admin(callback.from_user.id):
+        await callback.answer("❌ Siz admin emassiz!", show_alert=True)
         return
     await callback.message.answer("📢 Xabar matnini kiriting:")
     await state.set_state(AuthState.admin_broadcast_message)
@@ -841,7 +862,7 @@ async def admin_broadcast(callback: types.CallbackQuery, state: FSMContext):
 
 @dp.message(AuthState.admin_broadcast_message)
 async def process_broadcast(message: types.Message, state: FSMContext):
-    if message.from_user.id != ADMIN_ID:
+    if not await is_admin(message.from_user.id):
         return
     
     success = 0
@@ -912,3 +933,123 @@ async def show_stats(callback: types.CallbackQuery):
     
     await callback.message.answer(text, parse_mode="Markdown")
     await callback.answer()
+
+
+# --- Admin Qo'shish ---
+@dp.callback_query(F.data == "admin_add_admin")
+async def add_admin_prompt(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        return
+    
+    await callback.message.answer("👨‍💼 **Yangi admin qo'shish**\n\nAdmin ID raqamini kiriting:")
+    await state.set_state(AuthState.add_admin_id)
+    await callback.answer()
+
+@dp.message(AuthState.add_admin_id)
+async def process_add_admin(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    try:
+        new_admin_id = int(message.text.strip())
+    except ValueError:
+        await message.answer("❌ Noto'g'ri format! Faqat raqam kiriting.")
+        return
+    
+    # Tekshirish - allaqachon admin bo'lsa
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT admin_id FROM admins WHERE admin_id = ?", (new_admin_id,)) as cursor:
+            existing = await cursor.fetchone()
+        
+        if existing:
+            await message.answer(f"❌ Foydalanuvchi `{new_admin_id}` allaqachon admin!")
+            await state.clear()
+            return
+        
+        # Yangi admin qo'shish
+        await db.execute("""
+            INSERT INTO admins (admin_id, added_by, created_at)
+            VALUES (?, ?, ?)
+        """, (new_admin_id, message.from_user.id, datetime.now().isoformat()))
+        await db.commit()
+    
+    await message.answer(f"✅ Foydalanuvchi `{new_admin_id}` admin qilib belgilandi!", parse_mode="Markdown")
+    
+    # Yangi admin'ga xabar
+    try:
+        await bot.send_message(new_admin_id, "🎉 **Siz admin qilib belgilandi!**\n\nAdmin panel uchun `/start` yuboring.", parse_mode="Markdown")
+    except:
+        pass
+    
+    await state.clear()
+
+@dp.callback_query(F.data == "admin_list_admins")
+async def list_admins(callback: types.CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        return
+    
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT admin_id, created_at FROM admins ORDER BY created_at DESC") as cursor:
+            admins = await cursor.fetchall()
+    
+    text = "👥 **Admin Ro'yxati**\n\n"
+    text += f"👑 Asosiy Admin: `{ADMIN_ID}`\n\n"
+    
+    if not admins:
+        text += "Qo'shimcha adminlar yo'q."
+    else:
+        text += "**Qo'shimcha Adminlar:**\n"
+        for admin_id, created_at in admins:
+            date = created_at.split("T")[0]
+            text += f"🔹 `{admin_id}` (Qo'shilgan: {date})\n"
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🗑 Admin o'chirish", callback_data="admin_remove_admin")],
+        [InlineKeyboardButton(text="🔙 Orqaga", callback_data="main_admin")]
+    ])
+    
+    await callback.message.answer(text, reply_markup=kb, parse_mode="Markdown")
+    await callback.answer()
+
+@dp.callback_query(F.data == "admin_remove_admin")
+async def remove_admin_prompt(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        return
+    
+    await callback.message.answer("🗑 **Admin o'chirish**\n\nO'chirilishi kerak bo'lgan admin ID'sini kiriting:")
+    await state.set_state(AuthState.add_admin_id)
+    await callback.answer()
+
+@dp.message(AuthState.add_admin_id)
+async def process_remove_admin(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    try:
+        remove_admin_id = int(message.text.strip())
+    except ValueError:
+        await message.answer("❌ Noto'g'ri format!")
+        return
+    
+    if remove_admin_id == ADMIN_ID:
+        await message.answer("❌ Asosiy admin'ni o'chira olmaysiz!")
+        await state.clear()
+        return
+    
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM admins WHERE admin_id = ?", (remove_admin_id,))
+        await db.commit()
+    
+    await message.answer(f"✅ Admin `{remove_admin_id}` o'chirildi!", parse_mode="Markdown")
+    await state.clear()
+
+# Admin tekshirish funksiyasi
+async def is_admin(user_id: int) -> bool:
+    if user_id == ADMIN_ID:
+        return True
+    
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT admin_id FROM admins WHERE admin_id = ?", (user_id,)) as cursor:
+            result = await cursor.fetchone()
+    
+    return result is not None
