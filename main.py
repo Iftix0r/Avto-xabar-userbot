@@ -42,6 +42,7 @@ class AuthState(StatesGroup):
     admin_extend_sub = State()
     payment_screenshot = State()
     add_profile_phone = State()
+    add_profile_code = State()
     add_group_name = State()
     add_group_ids = State()
     add_admin_id = State()
@@ -501,24 +502,89 @@ async def show_profiles(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data == "add_profile")
 async def add_profile_prompt(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.answer("📱 **Yangi profil qo'shish**\n\nTelefon raqamini kiriting:")
+    kb = ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="📞 Raqamni yuborish", request_contact=True)]],
+        resize_keyboard=True, one_time_keyboard=True
+    )
+    await callback.message.answer("📱 **Yangi profil qo'shish**\n\nTugmani bosish orqali raqamingizni yuboring yoki qo'lda kiriting:", reply_markup=kb)
     await state.set_state(AuthState.add_profile_phone)
     await callback.answer()
 
 @dp.message(AuthState.add_profile_phone)
-async def process_add_profile(message: types.Message, state: FSMContext):
+async def process_add_profile_phone(message: types.Message, state: FSMContext):
+    phone = message.contact.phone_number if message.contact else message.text.replace(" ", "")
+    if not phone.startswith("+"): phone = "+" + phone
+    
     user_id = message.from_user.id
-    phone = message.text.strip()
+    session_name = f"profile_{user_id}_{int(datetime.now().timestamp())}"
+    session_path = f"sessions/{session_name}"
     
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("""
-            INSERT INTO profiles (user_id, phone, session_name, created_at)
-            VALUES (?, ?, ?, ?)
-        """, (user_id, phone, f"profile_{user_id}_{datetime.now().timestamp()}", datetime.now().isoformat()))
-        await db.commit()
+    await message.answer("Tekshirilmoqda...", reply_markup=types.ReplyKeyboardRemove())
+    client = TelegramClient(session_path, API_ID, API_HASH)
     
-    await message.answer(f"✅ Profil qo'shildi: `{phone}`", parse_mode="Markdown")
-    await state.clear()
+    try:
+        await client.connect()
+        sent_code = await client.send_code_request(phone)
+        
+        await state.update_data(
+            profile_phone=phone,
+            profile_session_name=session_name,
+            profile_phone_code_hash=sent_code.phone_code_hash
+        )
+        await client.disconnect()
+        
+        await message.answer("📩 **Tasdiqlash kodi yuborildi.**\nKodni vergul bilan ajratib yuboring (Masalan: `1,2,3,4,5`):", parse_mode="Markdown")
+        await state.set_state(AuthState.add_profile_code)
+    except Exception as e:
+        await message.answer(f"❌ Xatolik: {e}")
+        await client.disconnect()
+        await state.clear()
+
+@dp.message(AuthState.add_profile_code)
+async def process_add_profile_code(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    saved_code = data.get('profile_saved_code')
+    phone = data['profile_phone']
+    session_name = data['profile_session_name']
+    phone_code_hash = data['profile_phone_code_hash']
+    
+    user_id = message.from_user.id
+    session_path = f"sessions/{session_name}"
+    client = TelegramClient(session_path, API_ID, API_HASH)
+    await client.connect()
+
+    async def finish_auth():
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("""
+                INSERT INTO profiles (user_id, phone, session_name, created_at)
+                VALUES (?, ?, ?, ?)
+            """, (user_id, phone, session_name, datetime.now().isoformat()))
+            await db.commit()
+        await message.answer(f"✅ Profil qo'shildi: `{phone}`", parse_mode="Markdown")
+        await client.disconnect()
+        await state.clear()
+
+    if saved_code:
+        try:
+            await client.sign_in(password=message.text.strip())
+            await finish_auth()
+        except Exception as e:
+            await message.answer(f"❌ Xato: {e}")
+            await client.disconnect()
+        return
+
+    code = "".join(message.text.replace(" ", "").split(","))
+    try:
+        await client.sign_in(phone, code, phone_code_hash=phone_code_hash)
+        await finish_auth()
+    except SessionPasswordNeededError:
+        await state.update_data(profile_saved_code=code)
+        await message.answer("🔑 2FA Parolni yuboring:")
+        await client.disconnect()
+    except Exception as e:
+        await message.answer(f"❌ Xato: {e}")
+        await client.disconnect()
+        await state.clear()
 
 # --- Guruhlar Tizimi ---
 @dp.callback_query(F.data == "main_groups")
@@ -553,28 +619,20 @@ async def show_groups(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data == "add_group")
 async def add_group_prompt(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.answer("📁 **Yangi folder qo'shish**\n\nFolder nomini kiriting:")
+    await callback.message.answer("📁 **Yangi folder qo'shish**\n\nTelegramdagi papkangiz (folder) nomini kiriting:")
     await state.set_state(AuthState.add_group_name)
     await callback.answer()
 
 @dp.message(AuthState.add_group_name)
 async def process_group_name(message: types.Message, state: FSMContext):
-    await state.update_data(folder_name=message.text)
-    await message.answer("🔗 **Guruh ID'larini kiriting** (vergul bilan ajratib):\n\nMasalan: `-1001234567890, -1001234567891`")
-    await state.set_state(AuthState.add_group_ids)
-
-@dp.message(AuthState.add_group_ids)
-async def process_group_ids(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
-    data = await state.get_data()
-    folder_name = data.get('folder_name')
-    group_ids = message.text.strip()
+    folder_name = message.text.strip()
     
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
             INSERT INTO groups (user_id, folder_name, group_ids, created_at)
             VALUES (?, ?, ?, ?)
-        """, (user_id, folder_name, group_ids, datetime.now().isoformat()))
+        """, (user_id, folder_name, "", datetime.now().isoformat()))
         await db.commit()
     
     await message.answer(f"✅ Folder qo'shildi: **{folder_name}**", parse_mode="Markdown")
@@ -664,32 +722,95 @@ async def start_sender_handler(callback: types.CallbackQuery):
     await callback.answer()
 
 async def start_sender(user_id):
-    client = await get_user_client(user_id)
-    if not client:
-        return
-    
     data = users_data[user_id]
+    
+    # Barcha faol klientlarni yig'ish
+    clients = []
+    main_session_path = f"sessions/sess_{user_id}"
+    if os.path.exists(main_session_path + ".session"):
+        c = TelegramClient(main_session_path, API_ID, API_HASH)
+        await c.connect()
+        if await c.is_user_authorized():
+            clients.append(c)
+        else:
+            await c.disconnect()
+            
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT session_name FROM profiles WHERE user_id = ? AND is_active = 1", (user_id,)) as cursor:
+            profiles_db = await cursor.fetchall()
+            
+    for (session_name,) in profiles_db:
+        session_path = f"sessions/{session_name}"
+        if os.path.exists(session_path + ".session"):
+            c = TelegramClient(session_path, API_ID, API_HASH)
+            await c.connect()
+            if await c.is_user_authorized():
+                clients.append(c)
+            else:
+                await c.disconnect()
+                
+    if not clients:
+        data['is_running'] = False
+        return
+
+    # Guruhlarni bazadan olish
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT folder_name FROM groups WHERE user_id = ?", (user_id,)) as cursor:
+            user_folders = [row[0].lower() for row in await cursor.fetchall()]
+
     while data.get('is_running'):
         if not await check_subscription(user_id):
             data['is_running'] = False
             await bot.send_message(user_id, "❌ Obunangiz tugadi! Xizmat to'xtatildi.")
             break
+            
         try:
-            async for dialog in client.iter_dialogs():
-                if not data.get('is_running'):
-                    break
-                if dialog.is_group or dialog.is_channel:
+            for client in clients:
+                if not data.get('is_running'): break
+                
+                target_folder_ids = []
+                if user_folders:
                     try:
-                        await client.send_message(dialog.id, data['ad_text'])
-                        await asyncio.sleep(15)
-                    except:
-                        pass
+                        from telethon.tl.functions.messages import GetDialogFiltersRequest
+                        filters = await client(GetDialogFiltersRequest())
+                        for f in filters:
+                            if hasattr(f, 'title') and f.title.lower() in user_folders:
+                                target_folder_ids.append(f.id)
+                    except Exception as e:
+                        logging.error(f"Error getting DialogFilters: {e}")
+
+                if user_folders and target_folder_ids:
+                    for folder_id in target_folder_ids:
+                        if not data.get('is_running'): break
+                        async for dialog in client.iter_dialogs(folder=folder_id):
+                            if not data.get('is_running'): break
+                            if dialog.is_group or dialog.is_channel:
+                                try:
+                                    await client.send_message(dialog.id, data['ad_text'])
+                                    await asyncio.sleep(15)
+                                except:
+                                    pass
+                else:
+                    async for dialog in client.iter_dialogs():
+                        if not data.get('is_running'): break
+                        if dialog.is_group or dialog.is_channel:
+                            try:
+                                await client.send_message(dialog.id, data['ad_text'])
+                                await asyncio.sleep(15)
+                            except:
+                                pass
+                                
             for _ in range(data['interval']):
                 if not data.get('is_running'):
                     break
                 await asyncio.sleep(1)
-        except:
+        except Exception as e:
+            logging.error(f"Error in start_sender: {e}")
             await asyncio.sleep(60)
+            
+    # Loop tugagach klientlarni o'chirish
+    for c in clients:
+        await c.disconnect()
 
 # --- Profil va Sozlamalar ---
 @dp.callback_query(F.data == "main_profile")
