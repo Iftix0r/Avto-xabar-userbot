@@ -46,6 +46,7 @@ class AuthState(StatesGroup):
     add_group_name = State()
     add_group_ids = State()
     add_admin_id = State()
+    remove_admin_id = State()
 
 # --- Ma'lumotlar bazasi ---
 async def init_db():
@@ -125,9 +126,18 @@ async def init_db():
                 is_running INTEGER DEFAULT 0,
                 interval INTEGER,
                 ad_text TEXT,
-                image_path TEXT
+                image_path TEXT,
+                video_path TEXT,
+                voice_path TEXT
             )
         """)
+        
+        # Migratsiya: mavjud bazaga yangi ustunlarni qo'shish
+        try:
+            await db.execute("ALTER TABLE user_settings ADD COLUMN video_path TEXT")
+            await db.execute("ALTER TABLE user_settings ADD COLUMN voice_path TEXT")
+        except:
+            pass # Allaqachon mavjud bo'lsa
         
         await db.commit()
         
@@ -178,20 +188,32 @@ async def is_admin(user_id: int) -> bool:
     return result is not None
 
 # --- Klaviaturalar ---
-def get_main_keyboard(user_id, is_connected=False):
+async def get_main_keyboard(user_id, is_connected=False):
+    is_admin_user = await is_admin(user_id)
+    
     if not is_connected:
-        return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="📱 Akkountga ulanish")]], resize_keyboard=True)
+        buttons = [[KeyboardButton(text="📱 Akkountga ulanish")]]
+        if is_admin_user:
+            buttons.append([KeyboardButton(text="👑 Admin Panel (Inline)")]) # Inline keyboardni chiqarish uchun xabar yuboradi
+        return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
         
     kb = [
         [InlineKeyboardButton(text="👥 Profillar", callback_data="main_profillar"), InlineKeyboardButton(text="📊 Statistika", callback_data="main_stats")],
         [InlineKeyboardButton(text="💬 Xabar matni", callback_data="main_xabar"), InlineKeyboardButton(text="📋 Guruhlar", callback_data="main_groups")],
         [InlineKeyboardButton(text="▶️ Ishga tushirish", callback_data="main_start_sender"), InlineKeyboardButton(text="⏱ Interval", callback_data="main_interval")],
         [InlineKeyboardButton(text="⭐ Pro status", callback_data="main_pro")],
-        [InlineKeyboardButton(text="👤 Profil", callback_data="main_profile"), InlineKeyboardButton(text="⚙️ Sozlamalar", callback_data="main_settings")],
-        [InlineKeyboardButton(text="👨‍💻 Admin Panel", callback_data="main_admin")]
+        [InlineKeyboardButton(text="👤 Profil", callback_data="main_profile"), InlineKeyboardButton(text="⚙️ Sozlamalar", callback_data="main_settings")]
     ]
     
+    if is_admin_user:
+        kb.append([InlineKeyboardButton(text="👨‍💻 Admin Panel", callback_data="main_admin")])
+    
     return InlineKeyboardMarkup(inline_keyboard=kb)
+
+@dp.message(F.text == "👑 Admin Panel (Inline)")
+async def admin_panel_text_btn(message: types.Message):
+    if await is_admin(message.from_user.id):
+        await show_admin_panel(message)
 
 def get_subscription_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -283,23 +305,22 @@ async def start_handler(message: types.Message):
     
     # Admin tekshirish
     is_admin_user = await is_admin(user_id)
-    
-    # Admin'lar uchun to'g'ridan-to'g'ri admin panel
-    if is_admin_user:
-        await message.answer("👑 **Admin Boshqaruv Paneli**", reply_markup=get_main_keyboard(user_id, is_connected=True), parse_mode="Markdown")
-        return
-    
     client = await get_user_client(user_id)
+    is_connected = client is not None
+    
+    if is_admin_user:
+        await message.answer("👑 **Admin Boshqaruv Paneli**", reply_markup=await get_main_keyboard(user_id, is_connected=is_connected), parse_mode="Markdown")
+        return
     
     if not client:
         await message.answer(
             "👋 Assalomu alaykum! Botdan foydalanish uchun avval profilingizni ulashingiz kerak.",
-            reply_markup=get_main_keyboard(user_id, is_connected=False)
+            reply_markup=await get_main_keyboard(user_id, is_connected=False)
         )
     else:
         # Obuna bo'lgan foydalanuvchi
         if await check_subscription(user_id):
-            await message.answer("🏠 **Asosiy boshqaruv paneli:**", reply_markup=get_main_keyboard(user_id, is_connected=True), parse_mode="Markdown")
+            await message.answer("🏠 **Asosiy boshqaruv paneli:**", reply_markup=await get_main_keyboard(user_id, is_connected=True), parse_mode="Markdown")
         else:
             await send_sub_msg(message)
 
@@ -332,12 +353,20 @@ async def process_phone(message: types.Message, state: FSMContext):
 
 @dp.message(AuthState.code_pass)
 async def process_auth_step(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    saved_code = data.get('saved_code')
     user_id = message.from_user.id
-    if user_id not in users_data: return
-    client = users_data[user_id]['client']
+    code = message.text.replace(",", "").replace(" ", "")
+    data = await state.get_data()
     
+    if user_id not in users_data:
+        await message.answer("❌ Xatolik: Avtorizatsiya jarayoni topilmadi. Qayta urinib ko'ring.")
+        await state.clear()
+        return
+
+    client = users_data[user_id]['client']
+    phone = users_data[user_id]['phone']
+    phone_code_hash = users_data[user_id]['phone_code_hash']
+    saved_code = data.get('saved_code') # This is for 2FA password
+
     async def finish_auth():
         # Clientni _active_clients ga saqlash
         session_key = f"sess_{user_id}"
@@ -345,13 +374,13 @@ async def process_auth_step(message: types.Message, state: FSMContext):
         
         is_sub = await check_subscription(user_id)
         if is_sub:
-            await message.answer("✅ Muvaffaqiyatli ulandi!", reply_markup=get_main_keyboard(user_id, is_connected=True))
+            await message.answer("✅ Muvaffaqiyatli ulandi!", reply_markup=await get_main_keyboard(user_id, is_connected=True))
         else:
             await message.answer("✅ Akkount muvaffaqiyatli ulandi!")
             await send_sub_msg(message)
         await state.clear()
 
-    if saved_code:
+    if saved_code: # This means we are expecting a 2FA password
         try:
             await client.sign_in(password=message.text.strip())
             await finish_auth()
@@ -359,16 +388,17 @@ async def process_auth_step(message: types.Message, state: FSMContext):
             await message.answer(f"❌ Xato: {e}")
         return
 
-    code = "".join(message.text.replace(" ", "").split(","))
+    # Otherwise, we are expecting the phone code
     try:
-        await client.sign_in(users_data[user_id]['phone'], code, phone_code_hash=users_data[user_id]['phone_code_hash'])
+        await client.sign_in(phone, code, phone_code_hash=phone_code_hash)
         await finish_auth()
     except SessionPasswordNeededError:
-        await state.update_data(saved_code=code)
+        await state.update_data(saved_code=code) # Store the code, next message will be the password
         await message.answer("🔑 2FA Parolni yuboring:")
     except Exception as e:
         await message.answer(f"❌ Xato: {e}")
         await state.clear()
+
 
 # --- To'lov Tizimi ---
 @dp.callback_query(F.data.startswith("buy_"))
@@ -539,7 +569,7 @@ async def approve_payment(callback: types.CallbackQuery):
     
     # Foydalanuvchiga xabar va asosiy menyuni yuborish
     await bot.send_message(user_id, "✅ **To'lovingiz tasdiqlandi!**\n\nObunangiz faollashtirildi. Botdan foydalanishni boshlashingiz mumkin.", parse_mode="Markdown")
-    await bot.send_message(user_id, "🏠 **Asosiy boshqaruv paneli:**", reply_markup=get_main_keyboard(user_id, is_connected=True), parse_mode="Markdown")
+    await bot.send_message(user_id, "🏠 **Asosiy boshqaruv paneli:**", reply_markup=await get_main_keyboard(user_id, is_connected=True), parse_mode="Markdown")
     
     try:
         await callback.message.edit_caption(caption="✅ To'lov tasdiqlandi!", reply_markup=None)
@@ -796,16 +826,19 @@ async def process_group_name(message: types.Message, state: FSMContext):
     # Telegram folders check
     client = await get_user_client(user_id)
     found_groups = []
+    available_folders = []
     if client:
         try:
             from telethon.tl.functions.messages import GetDialogFiltersRequest
             filters = await client(GetDialogFiltersRequest())
             for f in filters:
-                if hasattr(f, 'title') and f.title.lower() == folder_name.lower():
-                    async for dialog in client.iter_dialogs(folder=f.id):
-                        if dialog.is_group or dialog.is_channel:
-                            found_groups.append(str(dialog.id))
-                    break
+                if hasattr(f, 'title'):
+                    available_folders.append(f.title)
+                    if f.title.lower() == folder_name.lower():
+                        async for dialog in client.iter_dialogs(folder=f.id):
+                            if dialog.is_group or dialog.is_channel:
+                                found_groups.append(str(dialog.id))
+                        break
         except Exception as e:
             logging.error(f"Sync error: {e}")
 
@@ -826,9 +859,11 @@ async def process_group_name(message: types.Message, state: FSMContext):
         )
         await state.clear()
     else:
+        folders_list = ", ".join([f"`{f}`" for f in available_folders]) if available_folders else "Papkalar topilmadi"
         await message.answer(
             f"✅ Folder yaratildi: **{folder_name}**\n\n"
             f"⚠️ Telegramdan bunday papka topilmadi.\n"
+            f"🔍 **Mavjud papkalaringiz:** {folders_list}\n\n"
             f"Endi shu folderga tegishli guruh IDlarini yuboring (har birini yangi qatordan) yoki hamma guruhlarni qo'shish uchun `/all` deb yozing:",
             parse_mode="Markdown"
         )
@@ -858,7 +893,7 @@ async def process_group_ids(message: types.Message, state: FSMContext):
         await db.execute("UPDATE groups SET group_ids = ? WHERE user_id = ? AND folder_name = ?", (group_ids, user_id, folder_name))
         await db.commit()
     
-    await message.answer(f"✅ {len(ids)} ta guruh saqlandi!", reply_markup=get_main_keyboard(user_id, is_connected=True))
+    await message.answer(f"✅ {len(ids)} ta guruh saqlandi!", reply_markup=await get_main_keyboard(user_id, is_connected=True))
     await state.clear()
 
 # --- Reklama Matni va Rasm ---
@@ -873,17 +908,46 @@ async def save_ad_text(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     if user_id not in users_data:
         users_data[user_id] = {'is_running': False, 'interval': DEFAULT_AD_DELAY}
-    users_data[user_id]['ad_text'] = message.text
+    
+    ad_text = message.caption or message.text or ""
+    image_path = None
+    video_path = None
+    voice_path = None
+    
+    if message.photo:
+        file_id = message.photo[-1].file_id
+        file = await bot.get_file(file_id)
+        image_path = f"payments/ad_{user_id}_img.jpg" # payments folderini rasm saqlash uchun Ham ishlatamiz
+        await bot.download_file(file.file_path, image_path)
+    elif message.video:
+        file_id = message.video.file_id
+        file = await bot.get_file(file_id)
+        video_path = f"payments/ad_{user_id}_vid.mp4"
+        await bot.download_file(file.file_path, video_path)
+    elif message.voice:
+        file_id = message.voice.file_id
+        file = await bot.get_file(file_id)
+        voice_path = f"payments/ad_{user_id}_voice.ogg"
+        await bot.download_file(file.file_path, voice_path)
+
+    users_data[user_id]['ad_text'] = ad_text
+    users_data[user_id]['image_path'] = image_path
+    users_data[user_id]['video_path'] = video_path
+    users_data[user_id]['voice_path'] = voice_path
     
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
-            INSERT INTO user_settings (user_id, ad_text, interval)
-            VALUES (?, ?, ?)
-            ON CONFLICT(user_id) DO UPDATE SET ad_text = excluded.ad_text
-        """, (user_id, message.text, users_data[user_id].get('interval', DEFAULT_AD_DELAY)))
+            INSERT INTO user_settings (user_id, ad_text, interval, image_path, video_path, voice_path)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET 
+                ad_text = excluded.ad_text,
+                image_path = excluded.image_path,
+                video_path = excluded.video_path,
+                voice_path = excluded.voice_path
+        """, (user_id, ad_text, users_data[user_id].get('interval', DEFAULT_AD_DELAY), image_path, video_path, voice_path))
         await db.commit()
     
-    await message.answer("✅ Xabar matni saqlandi!", reply_markup=get_main_keyboard(user_id, is_connected=True))
+    await message.answer("✅ Reklama xabari saqlandi!", reply_markup=await get_main_keyboard(user_id, is_connected=True))
     await state.clear()
 
 # --- Interval Sozlash ---
@@ -912,7 +976,7 @@ async def process_interval(callback: types.CallbackQuery, state: FSMContext):
         else:
             display_time = f"{seconds // 3600} soat"
         
-        await callback.message.answer(f"✅ Vaqt oralig'i **{display_time}** qilib belgilandi!", reply_markup=get_main_keyboard(user_id, is_connected=True), parse_mode="Markdown")
+        await callback.message.answer(f"✅ Vaqt oralig'i **{display_time}** qilib belgilandi!", reply_markup=await get_main_keyboard(user_id, is_connected=True), parse_mode="Markdown")
     
     await callback.answer()
 
@@ -936,7 +1000,7 @@ async def process_custom_interval(message: types.Message, state: FSMContext):
             """, (user_id, seconds, users_data[user_id].get('ad_text', '')))
             await db.commit()
         
-        await message.answer(f"✅ Interval **{seconds} sekund** qilib belgilandi!", reply_markup=get_main_keyboard(user_id, is_connected=True), parse_mode="Markdown")
+        await message.answer(f"✅ Interval **{seconds} sekund** qilib belgilandi!", reply_markup=await get_main_keyboard(user_id, is_connected=True), parse_mode="Markdown")
         await state.clear()
     except ValueError:
         await message.answer("❌ Noto'g'ri format! Faqat raqam kiriting.")
@@ -964,6 +1028,9 @@ async def start_sender_handler(callback: types.CallbackQuery):
     await callback.message.answer("🚀 Reklama tarqatish boshlandi!")
     await callback.answer()
 
+
+async def start_sender(user_id):
+    """Reklama yuborish tsikli"""
     logging.info(f"Starting sender for user {user_id}")
     try:
         data = users_data[user_id]
@@ -1047,7 +1114,20 @@ async def start_sender_handler(callback: types.CallbackQuery):
                     for target_id in final_target_ids:
                         if not data.get('is_running'): break
                         try:
-                            await client.send_message(target_id, data['ad_text'])
+                            # Media yuborishni tekshirish
+                            media_file = None
+                            if data.get('image_path') and os.path.exists(data['image_path']):
+                                media_file = data['image_path']
+                            elif data.get('video_path') and os.path.exists(data['video_path']):
+                                media_file = data['video_path']
+                            elif data.get('voice_path') and os.path.exists(data['voice_path']):
+                                media_file = data['voice_path']
+
+                            if media_file:
+                                await client.send_file(target_id, media_file, caption=data.get('ad_text', ''))
+                            else:
+                                await client.send_message(target_id, data.get('ad_text', ''))
+                            
                             total_sent += 1
                             await asyncio.sleep(15)
                         except Exception as e:
@@ -1058,7 +1138,20 @@ async def start_sender_handler(callback: types.CallbackQuery):
                         if not data.get('is_running'): break
                         if dialog.is_group or dialog.is_channel:
                             try:
-                                await client.send_message(dialog.id, data['ad_text'])
+                                # Media yuborishni tekshirish
+                                media_file = None
+                                if data.get('image_path') and os.path.exists(data['image_path']):
+                                    media_file = data['image_path']
+                                elif data.get('video_path') and os.path.exists(data['video_path']):
+                                    media_file = data['video_path']
+                                elif data.get('voice_path') and os.path.exists(data['voice_path']):
+                                    media_file = data['voice_path']
+
+                                if media_file:
+                                    await client.send_file(dialog.id, media_file, caption=data.get('ad_text', ''))
+                                else:
+                                    await client.send_message(dialog.id, data.get('ad_text', ''))
+                                
                                 total_sent += 1
                                 await asyncio.sleep(15)
                             except Exception as e:
@@ -1083,10 +1176,6 @@ async def start_sender_handler(callback: types.CallbackQuery):
         except Exception as e:
             logging.error(f"Error in start_sender loop: {e}")
             await asyncio.sleep(60)
-            
-    # Loop tugagach klientlarni o'chirish
-    for c in clients:
-        await c.disconnect()
 
 # --- Profil va Sozlamalar ---
 @dp.callback_query(F.data == "main_profile")
@@ -1153,7 +1242,7 @@ async def logout(callback: types.CallbackQuery):
     if user_id in users_data:
         del users_data[user_id]
     
-    await callback.message.answer("✅ Chiqildi!", reply_markup=get_main_keyboard(user_id, is_connected=False))
+    await callback.message.answer("✅ Chiqildi!", reply_markup=await get_main_keyboard(user_id, is_connected=False))
     await callback.answer()
 
 @dp.callback_query(F.data == "main_relogin")
@@ -1196,8 +1285,11 @@ async def admin_stats(callback: types.CallbackQuery):
         await callback.answer("❌ Siz admin emassiz!", show_alert=True)
         return
     
-    total_users = len(users_data)
-    active_bots = sum(1 for u in users_data.values() if u.get('is_running'))
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT COUNT(*) FROM subscriptions") as cursor:
+            total_users = (await cursor.fetchone())[0]
+        async with db.execute("SELECT COUNT(*) FROM user_settings WHERE is_running = 1") as cursor:
+            active_bots = (await cursor.fetchone())[0]
     
     text = (
         f"📈 **Tizim Statistikasi**\n\n"
@@ -1235,6 +1327,15 @@ async def admin_search(callback: types.CallbackQuery, state: FSMContext):
         await callback.answer("❌ Siz admin emassiz!", show_alert=True)
         return
     await callback.message.answer("🔍 Foydalanuvchi ID'sini kiriting:")
+    await state.set_state(AuthState.admin_search_user)
+    await callback.answer()
+
+@dp.callback_query(F.data == "admin_extend")
+async def admin_extend_btn(callback: types.CallbackQuery, state: FSMContext):
+    if not await is_admin(callback.from_user.id):
+        await callback.answer("❌ Siz admin emassiz!", show_alert=True)
+        return
+    await callback.message.answer("⏰ Obunasini uzaytirmoqchi bo'lgan foydalanuvchi ID'sini kiriting:")
     await state.set_state(AuthState.admin_search_user)
     await callback.answer()
 
@@ -1406,14 +1507,17 @@ async def process_price_update(message: types.Message, state: FSMContext):
 
 async def resume_senders():
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT user_id, interval, ad_text FROM user_settings WHERE is_running = 1") as cursor:
+        async with db.execute("SELECT user_id, interval, ad_text, image_path, video_path, voice_path FROM user_settings WHERE is_running = 1") as cursor:
             running_users = await cursor.fetchall()
     
-    for user_id, interval, ad_text in running_users:
+    for user_id, interval, ad_text, img, vid, voice in running_users:
         users_data[user_id] = {
             'is_running': True,
             'interval': interval,
-            'ad_text': ad_text
+            'ad_text': ad_text,
+            'image_path': img,
+            'video_path': vid,
+            'voice_path': voice
         }
         asyncio.create_task(start_sender(user_id))
         logging.info(f"Resumed sender for user {user_id}")
@@ -1465,20 +1569,22 @@ async def show_stats(callback: types.CallbackQuery):
     interval = users_data.get(user_id, {}).get('interval', DEFAULT_AD_DELAY)
     ad_text = users_data.get(user_id, {}).get('ad_text', '')
     
-    # Profillar sonini aniqlash
     async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT COUNT(*) FROM subscriptions") as cursor:
+            total_users_count = (await cursor.fetchone())[0]
         async with db.execute("SELECT COUNT(*) FROM profiles WHERE user_id = ?", (user_id,)) as cursor:
             profiles_count = (await cursor.fetchone())[0]
         async with db.execute("SELECT COUNT(*) FROM groups WHERE user_id = ?", (user_id,)) as cursor:
             groups_count = (await cursor.fetchone())[0]
 
     text = (
-        f"📊 **Sender Statistikasi**\n\n"
-        f"🔹 Holat: **{status_emoji}**\n"
+        f"📊 **Bot Statistikasi**\n\n"
+        f"👥 Botdagi jami foydalanuvchilar: `{total_users_count}`\n"
+        f"🔹 Sizning holatingiz: **{status_emoji}**\n"
         f"⏱ Interval: `{interval} sekund`\n"
         f"📝 Reklama: {'✅ Sozlangan' if ad_text else '❌ Yo`q'}\n"
-        f"📱 Ulangan akkauntlar: `{profiles_count + 1} ta`\n"
-        f"📁 Folderlar: `{groups_count} ta`"
+        f"📱 Ulangan akkauntlaringiz: `{profiles_count + 1} ta`\n"
+        f"📁 Folderlaringiz: `{groups_count} ta`"
     )
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -1575,10 +1681,10 @@ async def remove_admin_prompt(callback: types.CallbackQuery, state: FSMContext):
         return
     
     await callback.message.answer("🗑 **Admin o'chirish**\n\nO'chirilishi kerak bo'lgan admin ID'sini kiriting:")
-    await state.set_state(AuthState.add_admin_id)
+    await state.set_state(AuthState.remove_admin_id)
     await callback.answer()
 
-@dp.message(AuthState.add_admin_id)
+@dp.message(AuthState.remove_admin_id)
 async def process_remove_admin(message: types.Message, state: FSMContext):
     if not await is_admin(message.from_user.id):
         return
