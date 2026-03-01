@@ -1353,22 +1353,20 @@ async def extend_buy_subscription(callback: types.CallbackQuery, state: FSMConte
     
     await state.update_data(plan_type=plan_key, plan_name=plan_name, days=days, amount=amount)
     
-    text = (
-        f"💳 **To'lov Tizimi**\n\n"
-        f"📦 Tanlangan reja: **{plan_name}**\n"
-        f"💰 Summa: **{amount:,} so'm**\n\n"
-        f"📝 **To'lov qilish:**\n"
-        f"1. Quyidagi raqamga pul o'tkazing\n"
-        f"2. Chekni rasm sifatida yuboring\n"
-        f"3. Admin tasdiqlashi kutib turing\n\n"
-        f"👤 Admin: @admin_username\n"
-        f"💳 Karta: 9860 12XX XXXX XXXX"
-    )
-    
+    # Mudat tanlash uchun tugmalar
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📸 Chekni yuborish", callback_data=f"payment_screenshot_{plan_key}")],
-        [InlineKeyboardButton(text="❌ Bekor qilish", callback_data="cancel_payment")]
+        [InlineKeyboardButton(text="30 kun", callback_data="user_extend_days_30")],
+        [InlineKeyboardButton(text="90 kun", callback_data="user_extend_days_90")],
+        [InlineKeyboardButton(text="180 kun", callback_data="user_extend_days_180")],
+        [InlineKeyboardButton(text="365 kun", callback_data="user_extend_days_365")],
+        [InlineKeyboardButton(text="🔙 Bekor qilish", callback_data="user_extend_sub")]
     ])
+    
+    text = (
+        f"💎 **{plan_name}** rejasi tanlandi\n\n"
+        f"💰 Summa: **{amount:,} so'm**\n\n"
+        f"⏱ **Muddatni tanlang:**"
+    )
     
     await callback.message.answer(text, reply_markup=kb, parse_mode="Markdown")
     await callback.answer()
@@ -1550,6 +1548,7 @@ async def admin_extend_user(callback: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data.startswith("extend_days_"))
 async def extend_days(callback: types.CallbackQuery, state: FSMContext):
+    """Admin panel'dan obuna uzaytirish uchun"""
     if not await is_admin(callback.from_user.id):
         await callback.answer("❌ Siz admin emassiz!", show_alert=True)
         return
@@ -1561,6 +1560,39 @@ async def extend_days(callback: types.CallbackQuery, state: FSMContext):
     await add_subscription(user_id, days)
     await callback.message.answer(f"✅ Foydalanuvchi `{user_id}` ga {days} kun berildi!", parse_mode="Markdown")
     await state.clear()
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("user_extend_days_"))
+async def user_extend_days(callback: types.CallbackQuery, state: FSMContext):
+    """Foydalanuvchi o'z obunasini uzaytirish uchun"""
+    user_id = callback.from_user.id
+    days = int(callback.data.split("_")[-1])
+    
+    data = await state.get_data()
+    plan_type = data.get('plan_type')
+    plan_name = data.get('plan_name')
+    amount = data.get('amount')
+    
+    await state.update_data(plan_type=plan_type, plan_name=plan_name, days=days, amount=amount)
+    
+    text = (
+        f"💳 **To'lov Tizimi**\n\n"
+        f"📦 Tanlangan reja: **{plan_name}**\n"
+        f"💰 Summa: **{amount:,} so'm**\n\n"
+        f"📝 **To'lov qilish:**\n"
+        f"1. Quyidagi raqamga pul o'tkazing\n"
+        f"2. Chekni rasm sifatida yuboring\n"
+        f"3. Admin tasdiqlashi kutib turing\n\n"
+        f"👤 Admin: @admin_username\n"
+        f"💳 Karta: 9860 12XX XXXX XXXX"
+    )
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📸 Chekni yuborish", callback_data=f"payment_screenshot_{plan_type}")],
+        [InlineKeyboardButton(text="❌ Bekor qilish", callback_data="cancel_payment")]
+    ])
+    
+    await callback.message.answer(text, reply_markup=kb, parse_mode="Markdown")
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("admin_remove_sub_"))
