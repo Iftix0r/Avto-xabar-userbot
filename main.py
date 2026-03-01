@@ -152,6 +152,16 @@ async def init_db():
             )
         """)
         
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS payment_info (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                card_number TEXT,
+                card_holder TEXT,
+                amount INTEGER,
+                created_at TEXT
+            )
+        """)
+        
         # Unique index for groups to prevent duplicates
         try:
             await db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_user_folder ON groups(user_id, folder_name)")
@@ -495,17 +505,35 @@ async def buy_subscription(callback: types.CallbackQuery, state: FSMContext):
     
     await state.update_data(plan_type=plan_key, plan_name=plan_name, days=days, amount=amount)
     
-    text = (
-        f"💳 **To'lov Tizimi**\n\n"
-        f"📦 Tanlangan reja: **{plan_name}**\n"
-        f"💰 Summa: **{amount:,} so'm**\n\n"
-        f"📝 **To'lov qilish:**\n"
-        f"1. Quyidagi raqamga pul o'tkazing\n"
-        f"2. Chekni rasm sifatida yuboring\n"
-        f"3. Admin tasdiqlashi kutib turing\n\n"
-        f"👤 Admin: @admin_username\n"
-        f"💳 Karta: 9860 12XX XXXX XXXX"
-    )
+    # Admin panel'dan to'lov ma'lumotlarini olish
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT card_number, card_holder, amount FROM payment_info ORDER BY created_at DESC LIMIT 1") as cursor:
+            payment_row = await cursor.fetchone()
+    
+    if payment_row:
+        card_number, card_holder, payment_amount = payment_row
+        text = (
+            f"💳 **To'lov Tizimi**\n\n"
+            f"📦 Tanlangan reja: **{plan_name}**\n"
+            f"💰 Summa: **{amount:,} so'm**\n\n"
+            f"📝 **To'lov qilish:**\n"
+            f"1. Quyidagi karta raqamiga pul o'tkazing\n"
+            f"2. Chekni rasm sifatida yuboring\n"
+            f"3. Admin tasdiqlashi kutib turing\n\n"
+            f"💳 **Karta raqami:** `{card_number}`\n"
+            f"👤 **Karta egasi:** `{card_holder}`"
+        )
+    else:
+        text = (
+            f"💳 **To'lov Tizimi**\n\n"
+            f"📦 Tanlangan reja: **{plan_name}**\n"
+            f"💰 Summa: **{amount:,} so'm**\n\n"
+            f"📝 **To'lov qilish:**\n"
+            f"1. Quyidagi raqamga pul o'tkazing\n"
+            f"2. Chekni rasm sifatida yuboring\n"
+            f"3. Admin tasdiqlashi kutib turing\n\n"
+            f"⚠️ To'lov ma'lumotlari hali kiritilmagan. Admin bilan bog'laning."
+        )
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📸 Chekni yuborish", callback_data=f"payment_screenshot_{plan_key}")],
@@ -539,17 +567,35 @@ async def buy_pro_plan_handler(callback: types.CallbackQuery, state: FSMContext)
     
     await state.update_data(plan_type=plan_key, plan_name=plan_name, days=days, amount=amount)
     
-    text = (
-        f"💳 **To'lov Tizimi**\n\n"
-        f"📦 Tanlangan reja: **{plan_name}**\n"
-        f"💰 Summa: **{amount:,} so'm**\n\n"
-        f"📝 **To'lov qilish:**\n"
-        f"1. Quyidagi raqamga pul o'tkazing\n"
-        f"2. Chekni rasm sifatida yuboring\n"
-        f"3. Admin tasdiqlashi kutib turing\n\n"
-        f"👤 Admin: @admin_username\n"
-        f"💳 Karta: 9860 12XX XXXX XXXX"
-    )
+    # Admin panel'dan to'lov ma'lumotlarini olish
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT card_number, card_holder, amount FROM payment_info ORDER BY created_at DESC LIMIT 1") as cursor:
+            payment_row = await cursor.fetchone()
+    
+    if payment_row:
+        card_number, card_holder, payment_amount = payment_row
+        text = (
+            f"💳 **To'lov Tizimi**\n\n"
+            f"📦 Tanlangan reja: **{plan_name}**\n"
+            f"💰 Summa: **{amount:,} so'm**\n\n"
+            f"📝 **To'lov qilish:**\n"
+            f"1. Quyidagi karta raqamiga pul o'tkazing\n"
+            f"2. Chekni rasm sifatida yuboring\n"
+            f"3. Admin tasdiqlashi kutib turing\n\n"
+            f"💳 **Karta raqami:** `{card_number}`\n"
+            f"👤 **Karta egasi:** `{card_holder}`"
+        )
+    else:
+        text = (
+            f"💳 **To'lov Tizimi**\n\n"
+            f"📦 Tanlangan reja: **{plan_name}**\n"
+            f"💰 Summa: **{amount:,} so'm**\n\n"
+            f"📝 **To'lov qilish:**\n"
+            f"1. Quyidagi raqamga pul o'tkazing\n"
+            f"2. Chekni rasm sifatida yuboring\n"
+            f"3. Admin tasdiqlashi kutib turing\n\n"
+            f"⚠️ To'lov ma'lumotlari hali kiritilmagan. Admin bilan bog'laning."
+        )
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📸 Chekni yuborish", callback_data=f"payment_screenshot_{plan_key}")],
@@ -931,9 +977,9 @@ async def process_group_name(message: types.Message, state: FSMContext):
                 if hasattr(f, 'title'):
                     available_folders.append(f.title)
                     if f.title.lower() == folder_name.lower():
+                        # Barcha dialog turlarini qo'shish (chat, group, channel, bot, user)
                         async for dialog in client.iter_dialogs(folder=f.id):
-                            if dialog.is_group or dialog.is_channel:
-                                found_groups.append(str(dialog.id))
+                            found_groups.append(str(dialog.id))
                         break
         except Exception as e:
             logging.error(f"Sync error: {e}")
@@ -950,7 +996,7 @@ async def process_group_name(message: types.Message, state: FSMContext):
     if found_groups:
         await message.answer(
             f"✅ Folder qo'shildi: **{folder_name}**\n\n"
-            f"🔄 Telegramdan **{len(found_groups)}** ta guruh aniqlandi va avtomatik qo'shildi.",
+            f"🔄 Telegramdan **{len(found_groups)}** ta chat/guruh/kanal aniqlandi va avtomatik qo'shildi.",
             parse_mode="Markdown"
         )
         await state.clear()
@@ -960,7 +1006,7 @@ async def process_group_name(message: types.Message, state: FSMContext):
             f"✅ Folder yaratildi: **{folder_name}**\n\n"
             f"⚠️ Telegramdan bunday papka topilmadi.\n"
             f"🔍 **Mavjud papkalaringiz:** {folders_list}\n\n"
-            f"Endi shu folderga tegishli guruh IDlarini yuboring (har birini yangi qatordan) yoki hamma guruhlarni qo'shish uchun `/all` deb yozing:",
+            f"Endi shu folderga tegishli chat/guruh/kanal IDlarini yuboring (har birini yangi qatordan) yoki hamma chatlarni qo'shish uchun `/all` deb yozing:",
             parse_mode="Markdown"
         )
         await state.update_data(current_folder_name=folder_name)
@@ -976,10 +1022,10 @@ async def process_group_ids(message: types.Message, state: FSMContext):
     if message.text == "/all":
         client = await get_user_client(user_id)
         if client:
-            await message.answer("🔄 Barcha guruhlar yig'ilmoqda, kuting...")
+            await message.answer("🔄 Barcha chat/guruh/kanallar yig'ilmoqda, kuting...")
+            # Barcha dialog turlarini qo'shish
             async for dialog in client.iter_dialogs():
-                if dialog.is_group or dialog.is_channel:
-                    ids.append(str(dialog.id))
+                ids.append(str(dialog.id))
     else:
         ids = [i.strip() for i in message.text.split("\n") if i.strip()]
 
@@ -989,7 +1035,7 @@ async def process_group_ids(message: types.Message, state: FSMContext):
         await db.execute("UPDATE groups SET group_ids = ? WHERE user_id = ? AND folder_name = ?", (group_ids, user_id, folder_name))
         await db.commit()
     
-    await message.answer(f"✅ {len(ids)} ta guruh saqlandi!", reply_markup=await get_main_keyboard(user_id, is_connected=True))
+    await message.answer(f"✅ {len(ids)} ta chat/guruh/kanal saqlandi!", reply_markup=await get_main_keyboard(user_id, is_connected=True))
     await state.clear()
 
 # --- Reklama Matni va Rasm ---
@@ -1423,6 +1469,7 @@ async def show_admin_panel(message: types.Message):
         [InlineKeyboardButton(text="👥 Foydalanuvchilar", callback_data="admin_users_list")],
         [InlineKeyboardButton(text="🔍 Qidirish", callback_data="admin_search")],
         [InlineKeyboardButton(text="⏰ Obuna uzaytirish", callback_data="admin_extend")],
+        [InlineKeyboardButton(text="💳 To'lov ma'lumotlari", callback_data="admin_payment_info")],
         [InlineKeyboardButton(text="💰 Narxlarni sozlash", callback_data="admin_pricing")],
         [InlineKeyboardButton(text="📢 Xabar yuborish", callback_data="admin_broadcast")],
         [InlineKeyboardButton(text="👨‍💼 Admin qo'shish", callback_data="admin_add_admin")],
@@ -1719,6 +1766,90 @@ async def process_price_update(message: types.Message, state: FSMContext):
         await state.clear()
     except ValueError:
         await message.answer("❌ Noto'g'ri format! Faqat raqam kiriting.")
+
+# --- Admin To'lov Ma'lumotlari ---
+@dp.callback_query(F.data == "admin_payment_info")
+async def admin_payment_info(callback: types.CallbackQuery, state: FSMContext):
+    if not await is_admin(callback.from_user.id):
+        await callback.answer("❌ Siz admin emassiz!", show_alert=True)
+        return
+    
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT card_number, card_holder, amount FROM payment_info ORDER BY created_at DESC LIMIT 1") as cursor:
+            row = await cursor.fetchone()
+    
+    if row:
+        card_number, card_holder, amount = row
+        text = (
+            f"💳 **To'lov Ma'lumotlari**\n\n"
+            f"💳 Karta raqami: `{card_number}`\n"
+            f"👤 Karta egasi: `{card_holder}`\n"
+            f"💰 Summa: `{amount:,} so'm`"
+        )
+    else:
+        text = "💳 **To'lov Ma'lumotlari**\n\nHali ma'lumot kiritilmagan."
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ O'zgartirish", callback_data="edit_payment_info")],
+        [InlineKeyboardButton(text="🔙 Orqaga", callback_data="main_admin")]
+    ])
+    
+    await callback.message.answer(text, reply_markup=kb, parse_mode="Markdown")
+    await callback.answer()
+
+@dp.callback_query(F.data == "edit_payment_info")
+async def edit_payment_info(callback: types.CallbackQuery, state: FSMContext):
+    if not await is_admin(callback.from_user.id):
+        await callback.answer("❌ Siz admin emassiz!", show_alert=True)
+        return
+    
+    await callback.message.answer(
+        "💳 **To'lov ma'lumotlarini kiriting**\n\n"
+        "Quyidagi formatda yuboring:\n"
+        "`9860 1234 5678 9012`\n"
+        "`Ism Familiya`\n"
+        "`50000`\n\n"
+        "Birinchi qator: Karta raqami\n"
+        "Ikkinchi qator: Karta egasi\n"
+        "Uchinchi qator: Summa (so'm)",
+        parse_mode="Markdown"
+    )
+    await state.set_state(AuthState.admin_broadcast_message)
+    await callback.answer()
+
+@dp.message(AuthState.admin_broadcast_message)
+async def process_payment_info(message: types.Message, state: FSMContext):
+    if not await is_admin(message.from_user.id):
+        return
+    
+    lines = message.text.strip().split('\n')
+    if len(lines) < 3:
+        await message.answer("❌ Noto'g'ri format! 3 ta qator kerak.")
+        return
+    
+    try:
+        card_number = lines[0].strip()
+        card_holder = lines[1].strip()
+        amount = int(lines[2].strip())
+        
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("DELETE FROM payment_info")
+            await db.execute(
+                "INSERT INTO payment_info (card_number, card_holder, amount, created_at) VALUES (?, ?, ?, ?)",
+                (card_number, card_holder, amount, datetime.now().isoformat())
+            )
+            await db.commit()
+        
+        await message.answer(
+            f"✅ To'lov ma'lumotlari saqlandi!\n\n"
+            f"💳 Karta: `{card_number}`\n"
+            f"👤 Egasi: `{card_holder}`\n"
+            f"💰 Summa: `{amount:,} so'm`",
+            parse_mode="Markdown"
+        )
+        await state.clear()
+    except ValueError:
+        await message.answer("❌ Summa noto'g'ri! Faqat raqam kiriting.")
 
 async def resume_senders():
     async with aiosqlite.connect(DB_PATH) as db:
