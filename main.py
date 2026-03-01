@@ -198,24 +198,33 @@ async def is_admin(user_id: int) -> bool:
 # --- Klaviaturalar ---
 async def get_main_keyboard(user_id, is_connected=False):
     is_admin_user = await is_admin(user_id)
+    has_sub = await check_subscription(user_id)
     
     if not is_connected:
         buttons = [[KeyboardButton(text="📱 Akkountga ulanish")]]
         if is_admin_user:
-            buttons.append([KeyboardButton(text="👑 Admin Panel (Inline)")]) # Inline keyboardni chiqarish uchun xabar yuboradi
+            buttons.append([KeyboardButton(text="👑 Admin Panel (Inline)")])
         return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
         
-    kb = [
-        [InlineKeyboardButton(text="👥 Profillar", callback_data="main_profillar"), InlineKeyboardButton(text="📊 Statistika", callback_data="main_stats")],
-        [InlineKeyboardButton(text="💬 Xabar matni", callback_data="main_xabar"), InlineKeyboardButton(text="📋 Guruhlar", callback_data="main_groups")],
-        [InlineKeyboardButton(text="▶️ Ishga tushirish", callback_data="main_start_sender"), InlineKeyboardButton(text="⏱ Interval", callback_data="main_interval")],
-        [InlineKeyboardButton(text="⭐ Pro status", callback_data="main_pro")],
-        [InlineKeyboardButton(text="👤 Profil", callback_data="main_profile"), InlineKeyboardButton(text="⚙️ Sozlamalar", callback_data="main_settings")]
-    ]
+    kb = []
+    
+    # Faqat obunasi borlarga boshqaruv tugmalarini ko'rsatamiz
+    if has_sub:
+        kb.extend([
+            [InlineKeyboardButton(text="👥 Profillar", callback_data="main_profillar"), InlineKeyboardButton(text="📊 Statistika", callback_data="main_stats")],
+            [InlineKeyboardButton(text="💬 Xabar matni", callback_data="main_xabar"), InlineKeyboardButton(text="📋 Guruhlar", callback_data="main_groups")],
+            [InlineKeyboardButton(text="▶️ Ishga tushirish", callback_data="main_start_sender"), InlineKeyboardButton(text="⏱ Interval", callback_data="main_interval")],
+            [InlineKeyboardButton(text="⭐ Pro status", callback_data="main_pro")],
+            [InlineKeyboardButton(text="👤 Profil", callback_data="main_profile"), InlineKeyboardButton(text="⚙️ Sozlamalar", callback_data="main_settings")]
+        ])
     
     if is_admin_user:
         kb.append([InlineKeyboardButton(text="👨‍💻 Admin Panel", callback_data="main_admin")])
     
+    # Agar obuna yo'q bo'lsa va admin bo'lmasa, faqat obuna tugmasini qaytaramiz (aslida bu start_handlerda boshqariladi)
+    if not has_sub and not is_admin_user:
+        return get_subscription_keyboard()
+
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
 @dp.message(F.text == "👑 Admin Panel (Inline)")
@@ -322,26 +331,36 @@ async def start_handler(message: types.Message):
         """, (user_id, message.from_user.username, message.from_user.full_name, datetime.now().isoformat()))
         await db.commit()
     
-    # Admin tekshirish
     is_admin_user = await is_admin(user_id)
     client = await get_user_client(user_id)
     is_connected = client is not None
+    has_sub = await check_subscription(user_id)
     
-    if is_admin_user:
-        await message.answer("👑 **Admin Boshqaruv Paneli**", reply_markup=await get_main_keyboard(user_id, is_connected=is_connected), parse_mode="Markdown")
-        return
-    
-    if not client:
+    if not is_connected:
         await message.answer(
             "👋 Assalomu alaykum! Botdan foydalanish uchun avval profilingizni ulashingiz kerak.",
             reply_markup=await get_main_keyboard(user_id, is_connected=False)
         )
+        return
+    
+    if has_sub:
+        await message.answer("🏠 **Asosiy boshqaruv paneli:**", reply_markup=await get_main_keyboard(user_id, is_connected=True), parse_mode="Markdown")
     else:
-        # Obuna bo'lgan foydalanuvchi
-        if await check_subscription(user_id):
-            await message.answer("🏠 **Asosiy boshqaruv paneli:**", reply_markup=await get_main_keyboard(user_id, is_connected=True), parse_mode="Markdown")
-        else:
-            await send_sub_msg(message)
+        # Obuna yo'q, lekin admin bo'lsa admin panel tugmasini qo'shib ko'rsatamiz
+        kb = get_subscription_keyboard()
+        if is_admin_user:
+            # Admin uchun obuna xabari tagiga admin panel tugmasini qo'shamiz
+            new_kb = []
+            for row in kb.inline_keyboard:
+                new_kb.append(row)
+            new_kb.append([InlineKeyboardButton(text="👨‍💻 Admin Panel", callback_data="main_admin")])
+            kb = InlineKeyboardMarkup(inline_keyboard=new_kb)
+            
+        await message.answer(
+            "❌ **Sizda faol obuna mavjud emas!**\n\nBot imkoniyatlaridan foydalanish uchun obuna sotib oling:",
+            reply_markup=kb,
+            parse_mode="Markdown"
+        )
 
 @dp.message(F.text == "📱 Akkountga ulanish")
 async def prompt_phone(message: types.Message, state: FSMContext):
