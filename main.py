@@ -121,6 +121,15 @@ async def init_db():
         """)
         
         await db.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY,
+                username TEXT,
+                full_name TEXT,
+                created_at TEXT
+            )
+        """)
+        
+        await db.execute("""
             CREATE TABLE IF NOT EXISTS user_settings (
                 user_id INTEGER PRIMARY KEY,
                 is_running INTEGER DEFAULT 0,
@@ -132,13 +141,12 @@ async def init_db():
             )
         """)
         
-        # Migratsiya: mavjud bazaga yangi ustunlarni qo'shish
+        # Unique index for groups to prevent duplicates
         try:
-            await db.execute("ALTER TABLE user_settings ADD COLUMN video_path TEXT")
-            await db.execute("ALTER TABLE user_settings ADD COLUMN voice_path TEXT")
+            await db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_user_folder ON groups(user_id, folder_name)")
         except:
-            pass # Allaqachon mavjud bo'lsa
-        
+            pass
+
         await db.commit()
         
         # Default narxlarni qo'shish
@@ -302,6 +310,17 @@ def get_interval_keyboard():
 @dp.message(Command("start"))
 async def start_handler(message: types.Message):
     user_id = message.from_user.id
+    
+    # Foydalanuvchini ro'yxatga olish
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            INSERT INTO users (user_id, username, full_name, created_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET 
+                username = excluded.username,
+                full_name = excluded.full_name
+        """, (user_id, message.from_user.username, message.from_user.full_name, datetime.now().isoformat()))
+        await db.commit()
     
     # Admin tekshirish
     is_admin_user = await is_admin(user_id)
@@ -899,7 +918,7 @@ async def process_group_ids(message: types.Message, state: FSMContext):
 # --- Reklama Matni va Rasm ---
 @dp.callback_query(F.data == "main_xabar")
 async def set_ad_text(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.answer("📝 **Reklama matnini kiriting:**")
+    await callback.message.answer("📝 **Reklama xabaringizni yuboring.**\n\nSiz matn, rasm+matn, video+matn yoki ovozli xabar yuborishingiz mumkin. Bot aynan shu ko'rinishda tarqatadi.")
     await state.set_state(AuthState.ad_text)
     await callback.answer()
 
@@ -1548,18 +1567,29 @@ async def show_pro_status(callback: types.CallbackQuery):
         f"📦 Sizning reja: **{plan.upper()}**\n\n"
         f"✨ **Imkoniyatlar:**\n"
         f"✅ Cheksiz guruhlar\n"
-        f"✅ Rasm bilan reklama\n"
+        f"✅ Rasm/Video/Ovoz bilan reklama\n"
         f"✅ Avtomatik yuborish\n"
         f"✅ Prioritet qo'llab-quvvatlash"
     )
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💎 Yanada yaxshi reja", callback_data="buy_vip")],
+        [InlineKeyboardButton(text="💎 Obuna bo'lish / Yangilash", callback_data="buy_pro_menu")],
+        [InlineKeyboardButton(text="📝 Media xabar sozlash", callback_data="main_xabar")],
         [InlineKeyboardButton(text="🔙 Orqaga", callback_data="main_profile")]
     ])
     
-    await callback.message.answer(text, reply_markup=kb, parse_mode="Markdown")
+    await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
     await callback.answer()
+
+@dp.callback_query(F.data == "buy_pro_menu")
+async def buy_pro_menu_handler(callback: types.CallbackQuery):
+    await callback.message.edit_text("💎 **Obuna bo'lish uchun reja tanlang:**", reply_markup=get_subscription_keyboard(), parse_mode="Markdown")
+    await callback.answer()
+
+@dp.message(Command("cancel"))
+async def cancel_handler(message: types.Message, state: FSMContext):
+    await state.clear()
+    await message.answer("✅ Amal bekor qilindi.", reply_markup=await get_main_keyboard(message.from_user.id, is_connected=True))
 
 @dp.callback_query(F.data == "main_stats")
 async def show_stats(callback: types.CallbackQuery):
