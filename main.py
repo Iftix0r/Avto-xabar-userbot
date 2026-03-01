@@ -119,6 +119,16 @@ async def init_db():
             )
         """)
         
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS user_settings (
+                user_id INTEGER PRIMARY KEY,
+                is_running INTEGER DEFAULT 0,
+                interval INTEGER,
+                ad_text TEXT,
+                image_path TEXT
+            )
+        """)
+        
         await db.commit()
         
         # Default narxlarni qo'shish
@@ -409,27 +419,42 @@ async def process_payment_screenshot(message: types.Message, state: FSMContext):
         parse_mode="Markdown"
     )
     
-    # Admin'ga xabar
     admin_text = (
         f"🔔 **Yangi To'lov So'rovi**\n\n"
         f"👤 Foydalanuvchi: `{user_id}`\n"
-        f"📦 Reja: {data.get('plan_name')}\n"
-        f"💰 Summa: {data.get('amount'):,} so'm\n\n"
+        f"📦 Reja: {data.get('plan_name', 'Noma`lum')}\n"
+        f"💰 Summa: {int(data.get('amount', 0)):,} so'm\n\n"
         f"Tasdiqlaysizmi?"
     )
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Tasdiqlash", callback_data=f"approve_payment_{user_id}_{data.get('plan_type')}")],
+        [InlineKeyboardButton(text="✅ Tasdiqlash", callback_data=f"approve_payment_{user_id}_{data.get('plan_type', 'none')}")],
         [InlineKeyboardButton(text="❌ Rad etish", callback_data=f"reject_payment_{user_id}")]
     ])
     
-    await bot.send_message(ADMIN_ID, admin_text, reply_markup=kb, parse_mode="Markdown")
+    # Barcha adminlarga xabar yuborish
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT admin_id FROM admins") as cursor:
+            admins = await cursor.fetchall()
+            
+    # Asosiy adminni ham qo'shish
+    admin_ids = {ADMIN_ID}
+    for (a_id,) in admins:
+        admin_ids.add(a_id)
+        
+    for a_id in admin_ids:
+        try:
+            await bot.send_message(a_id, admin_text, reply_markup=kb, parse_mode="Markdown")
+        except Exception as e:
+            logging.error(f"Error sending payment to admin {a_id}: {e}")
     
     await state.clear()
 
 @dp.callback_query(F.data.startswith("approve_payment_"))
 async def approve_payment(callback: types.CallbackQuery):
-    if callback.from_user.id != ADMIN_ID: return
+    if not await is_admin(callback.from_user.id):
+        await callback.answer("❌ Siz admin emassiz!", show_alert=True)
+        return
     
     parts = callback.data.split("_")
     user_id = int(parts[2])
@@ -454,7 +479,9 @@ async def approve_payment(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data.startswith("reject_payment_"))
 async def reject_payment(callback: types.CallbackQuery):
-    if callback.from_user.id != ADMIN_ID: return
+    if not await is_admin(callback.from_user.id):
+        await callback.answer("❌ Siz admin emassiz!", show_alert=True)
+        return
     
     user_id = int(callback.data.split("_")[-1])
     
@@ -740,6 +767,14 @@ async def save_ad_text(message: types.Message, state: FSMContext):
         users_data[user_id] = {'is_running': False, 'interval': DEFAULT_AD_DELAY}
     users_data[user_id]['ad_text'] = message.text
     
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            INSERT INTO user_settings (user_id, ad_text, interval)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET ad_text = excluded.ad_text
+        """, (user_id, message.text, users_data[user_id].get('interval', DEFAULT_AD_DELAY)))
+        await db.commit()
+    
     await message.answer("✅ Xabar matni saqlandi!", reply_markup=get_main_keyboard(user_id, is_connected=True))
     await state.clear()
 
@@ -781,10 +816,17 @@ async def process_custom_interval(message: types.Message, state: FSMContext):
         if seconds < 60:
             await message.answer("❌ Minimal 60 sekund bo'lishi kerak!")
             return
-        
         if user_id not in users_data:
             users_data[user_id] = {'is_running': False, 'ad_text': ''}
         users_data[user_id]['interval'] = seconds
+        
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("""
+                INSERT INTO user_settings (user_id, interval, ad_text)
+                VALUES (?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET interval = excluded.interval
+            """, (user_id, seconds, users_data[user_id].get('ad_text', '')))
+            await db.commit()
         
         await message.answer(f"✅ Interval **{seconds} sekund** qilib belgilandi!", reply_markup=get_main_keyboard(user_id, is_connected=True), parse_mode="Markdown")
         await state.clear()
@@ -805,23 +847,35 @@ async def start_sender_handler(callback: types.CallbackQuery):
         return
     
     users_data[user_id]['is_running'] = True
+    
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE user_settings SET is_running = 1 WHERE user_id = ?", (user_id,))
+        await db.commit()
+
     asyncio.create_task(start_sender(user_id))
     await callback.message.answer("🚀 Reklama tarqatish boshlandi!")
     await callback.answer()
 
-async def start_sender(user_id):
-    data = users_data[user_id]
+    logging.info(f"Starting sender for user {user_id}")
+    try:
+        data = users_data[user_id]
+    except KeyError:
+        logging.error(f"User data not found for {user_id}")
+        return
     
     # Barcha faol klientlarni yig'ish
     clients = []
     main_session_path = f"sessions/sess_{user_id}"
     if os.path.exists(main_session_path + ".session"):
         c = TelegramClient(main_session_path, API_ID, API_HASH)
-        await c.connect()
-        if await c.is_user_authorized():
-            clients.append(c)
-        else:
-            await c.disconnect()
+        try:
+            await c.connect()
+            if await c.is_user_authorized():
+                clients.append(c)
+            else:
+                await c.disconnect()
+        except Exception as e:
+            logging.error(f"Main client error for {user_id}: {e}")
             
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("SELECT session_name FROM profiles WHERE user_id = ? AND is_active = 1", (user_id,)) as cursor:
@@ -831,14 +885,21 @@ async def start_sender(user_id):
         session_path = f"sessions/{session_name}"
         if os.path.exists(session_path + ".session"):
             c = TelegramClient(session_path, API_ID, API_HASH)
-            await c.connect()
-            if await c.is_user_authorized():
-                clients.append(c)
-            else:
-                await c.disconnect()
+            try:
+                await c.connect()
+                if await c.is_user_authorized():
+                    clients.append(c)
+                else:
+                    await c.disconnect()
+            except Exception as e:
+                logging.error(f"Profile client {session_name} error: {e}")
                 
     if not clients:
         data['is_running'] = False
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("UPDATE user_settings SET is_running = 0 WHERE user_id = ?", (user_id,))
+            await db.commit()
+        await bot.send_message(user_id, "❌ Hech qanday faol Telegram akkaunt topilmadi! Iltimos, akkauntingizni qaytadan ulang.")
         return
 
     # Guruhlarni bazadan olish
@@ -851,13 +912,19 @@ async def start_sender(user_id):
                 if row[1]:
                     manual_group_ids[row[0].lower()] = [int(gid) for gid in row[1].split(",") if gid]
 
+    await bot.send_message(user_id, f"🔍 Guruhlar tahlil qilinmoqda ({len(clients)} akkaunt)...")
+
     while data.get('is_running'):
         if not await check_subscription(user_id):
             data['is_running'] = False
+            async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("UPDATE user_settings SET is_running = 0 WHERE user_id = ?", (user_id,))
+                await db.commit()
             await bot.send_message(user_id, "❌ Obunangiz tugadi! Xizmat to'xtatildi.")
             break
             
         try:
+            total_sent = 0
             for client in clients:
                 if not data.get('is_running'): break
                 
@@ -886,26 +953,37 @@ async def start_sender(user_id):
                         if not data.get('is_running'): break
                         try:
                             await client.send_message(target_id, data['ad_text'])
+                            total_sent += 1
                             await asyncio.sleep(15)
-                        except:
-                            pass
+                        except Exception as e:
+                            logging.warning(f"Failed to send to {target_id}: {e}")
                 else:
-                    # Agar folderlar o'chirib tashlangan bo'lsa yoki bo'sh bo'lsa hammasiga yuboradi
+                    # Agar folderlar aniqlanmagan bo'lsa, barcha guruhlarga yuboradi
                     async for dialog in client.iter_dialogs():
                         if not data.get('is_running'): break
                         if dialog.is_group or dialog.is_channel:
                             try:
                                 await client.send_message(dialog.id, data['ad_text'])
+                                total_sent += 1
                                 await asyncio.sleep(15)
-                            except:
-                                pass
-                                
+                            except Exception as e:
+                                logging.warning(f"Failed to send to {dialog.id}: {e}")
+            
+            if total_sent == 0:
+                await bot.send_message(user_id, "⚠️ Hech qanday guruh topilmadi. Folderlaringizni tekshiring.")
+                data['is_running'] = False
+                async with aiosqlite.connect(DB_PATH) as db:
+                    await db.execute("UPDATE user_settings SET is_running = 0 WHERE user_id = ?", (user_id,))
+                    await db.commit()
+                break
+
+            logging.info(f"Cycle finished for {user_id}. Waiting {data['interval']} seconds.")
             for _ in range(data['interval']):
-                if not data.get('is_running'):
-                    break
+                if not data.get('is_running'): break
                 await asyncio.sleep(1)
+                
         except Exception as e:
-            logging.error(f"Error in start_sender: {e}")
+            logging.error(f"Error in start_sender loop: {e}")
             await asyncio.sleep(60)
             
     # Loop tugagach klientlarni o'chirish
@@ -952,10 +1030,13 @@ async def show_settings(callback: types.CallbackQuery):
     await callback.answer()
 
 @dp.callback_query(F.data == "main_stop_sender")
-async def stop_sender(callback: types.CallbackQuery):
+async def stop_sender_handler(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     if user_id in users_data:
         users_data[user_id]['is_running'] = False
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("UPDATE user_settings SET is_running = 0 WHERE user_id = ?", (user_id,))
+            await db.commit()
         await callback.message.answer("✅ Sender to'xtatildi!")
     await callback.answer()
 
@@ -1225,10 +1306,25 @@ async def process_price_update(message: types.Message, state: FSMContext):
     except ValueError:
         await message.answer("❌ Noto'g'ri format! Faqat raqam kiriting.")
 
+async def resume_senders():
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT user_id, interval, ad_text FROM user_settings WHERE is_running = 1") as cursor:
+            running_users = await cursor.fetchall()
+    
+    for user_id, interval, ad_text in running_users:
+        users_data[user_id] = {
+            'is_running': True,
+            'interval': interval,
+            'ad_text': ad_text
+        }
+        asyncio.create_task(start_sender(user_id))
+        logging.info(f"Resumed sender for user {user_id}")
+
 # --- Main ---
 async def main():
     await init_db()
     print("Bot ishga tushdi...")
+    asyncio.create_task(resume_senders())
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
