@@ -1484,18 +1484,14 @@ async def relogin(callback: types.CallbackQuery, state: FSMContext):
 
 # --- Admin Panel ---
 async def show_admin_panel(message: types.Message):
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📊 Statistika", callback_data="admin_stats")],
-        [InlineKeyboardButton(text="👥 Foydalanuvchilar", callback_data="admin_users_list")],
-        [InlineKeyboardButton(text="🔍 Qidirish", callback_data="admin_search")],
-        [InlineKeyboardButton(text="⏰ Obuna uzaytirish", callback_data="admin_extend")],
-        [InlineKeyboardButton(text="💳 To'lov ma'lumotlari", callback_data="admin_payment_info")],
-        [InlineKeyboardButton(text="💰 Narxlarni sozlash", callback_data="admin_pricing")],
-        [InlineKeyboardButton(text="📢 Xabar yuborish", callback_data="admin_broadcast")],
-        [InlineKeyboardButton(text="👨‍💼 Admin qo'shish", callback_data="admin_add_admin")],
-        [InlineKeyboardButton(text="👥 Admin ro'yxati", callback_data="admin_list_admins")],
-        [InlineKeyboardButton(text="📱 Akkauntga ulanish", callback_data="admin_connect_account")]
-    ])
+    kb = ReplyKeyboardMarkup(keyboard=[
+        [KeyboardButton(text="📊 Statistika"), KeyboardButton(text="👥 Foydalanuvchilar")],
+        [KeyboardButton(text="🔍 Qidirish"), KeyboardButton(text="⏰ Obuna uzaytirish")],
+        [KeyboardButton(text="💳 To'lov ma'lumotlari"), KeyboardButton(text="💰 Narxlarni sozlash")],
+        [KeyboardButton(text="📢 Xabar yuborish"), KeyboardButton(text="👨‍💼 Admin qo'shish")],
+        [KeyboardButton(text="👥 Admin ro'yxati"), KeyboardButton(text="📱 Akkauntga ulanish")],
+        [KeyboardButton(text="🏠 Asosiy menu")]
+    ], resize_keyboard=True)
     await message.answer("👑 **Admin Boshqaruv Paneli**", reply_markup=kb, parse_mode="Markdown")
 
 @dp.callback_query(F.data == "main_admin")
@@ -1511,6 +1507,161 @@ async def admin_panel(callback: types.CallbackQuery):
     
     await show_admin_panel(callback.message)
     await callback.answer()
+
+# --- Admin Menu Message Handlers ---
+@dp.message(F.text == "📊 Statistika")
+async def admin_stats_msg(message: types.Message):
+    if not await is_admin(message.from_user.id):
+        await message.answer("❌ Siz admin emassiz!")
+        return
+    
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT COUNT(*) FROM subscriptions") as cursor:
+            total_users = (await cursor.fetchone())[0]
+        async with db.execute("SELECT COUNT(*) FROM user_settings WHERE is_running = 1") as cursor:
+            active_bots = (await cursor.fetchone())[0]
+    
+    text = (
+        f"📈 **Tizim Statistikasi**\n\n"
+        f"👥 Jami foydalanuvchilar: `{total_users}`\n"
+        f"⚡️ Faol senderlar: `{active_bots}`\n"
+        f"📅 Bugungi sana: `{datetime.now().strftime('%Y-%m-%d')}`"
+    )
+    await message.answer(text, parse_mode="Markdown")
+
+@dp.message(F.text == "👥 Foydalanuvchilar")
+async def admin_users_list_msg(message: types.Message):
+    if not await is_admin(message.from_user.id):
+        await message.answer("❌ Siz admin emassiz!")
+        return
+    
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT user_id, expiry_date FROM subscriptions") as cursor:
+            subs = await cursor.fetchall()
+    
+    text = "👥 **Foydalanuvchilar:**\n\n"
+    if not subs:
+        text += "Hozircha foydalanuvchilar yo'q."
+    else:
+        for uid, expiry in subs[:30]:
+            status = "🟢" if datetime.strptime(expiry, "%Y-%m-%d %H:%M:%S") > datetime.now() else "🔴"
+            text += f"{status} `{uid}` | {expiry.split()[0]}\n"
+    
+    await message.answer(text, parse_mode="Markdown")
+
+@dp.message(F.text == "🔍 Qidirish")
+async def admin_search_msg(message: types.Message, state: FSMContext):
+    if not await is_admin(message.from_user.id):
+        await message.answer("❌ Siz admin emassiz!")
+        return
+    await message.answer("🔍 Foydalanuvchi ID'sini kiriting:")
+    await state.set_state(AuthState.admin_search_user)
+
+@dp.message(F.text == "⏰ Obuna uzaytirish")
+async def admin_extend_btn_msg(message: types.Message, state: FSMContext):
+    if not await is_admin(message.from_user.id):
+        await message.answer("❌ Siz admin emassiz!")
+        return
+    await message.answer("⏰ Obunasini uzaytirmoqchi bo'lgan foydalanuvchi ID'sini kiriting:")
+    await state.set_state(AuthState.admin_search_user)
+
+@dp.message(F.text == "💳 To'lov ma'lumotlari")
+async def admin_payment_info_msg(message: types.Message, state: FSMContext):
+    if not await is_admin(message.from_user.id):
+        await message.answer("❌ Siz admin emassiz!")
+        return
+    
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT card_number, card_holder, amount FROM payment_info ORDER BY created_at DESC LIMIT 1") as cursor:
+            row = await cursor.fetchone()
+    
+    if row:
+        card_number, card_holder, amount = row
+        text = (
+            f"💳 **To'lov Ma'lumotlari**\n\n"
+            f"💳 Karta raqami: `{card_number}`\n"
+            f"👤 Karta egasi: `{card_holder}`\n"
+            f"💰 Summa: `{amount:,} so'm`"
+        )
+    else:
+        text = "💳 **To'lov Ma'lumotlari**\n\n⚠️ Hali kiritilmagan"
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ O'zgartirish", callback_data="edit_payment_info")]
+    ])
+    await message.answer(text, reply_markup=kb, parse_mode="Markdown")
+
+@dp.message(F.text == "💰 Narxlarni sozlash")
+async def admin_pricing_msg(message: types.Message):
+    if not await is_admin(message.from_user.id):
+        await message.answer("❌ Siz admin emassiz!")
+        return
+    
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT plan_type, duration_days, price FROM pricing") as cursor:
+            prices = await cursor.fetchall()
+    
+    text = "💰 **Narxlar:**\n\n"
+    for plan, days, price in prices:
+        text += f"🔹 {plan}: {days} kun = {price:,} so'm\n"
+    
+    await message.answer(text, parse_mode="Markdown")
+
+@dp.message(F.text == "📢 Xabar yuborish")
+async def admin_broadcast_msg(message: types.Message, state: FSMContext):
+    if not await is_admin(message.from_user.id):
+        await message.answer("❌ Siz admin emassiz!")
+        return
+    await message.answer("📢 Barcha foydalanuvchilarga yuborish uchun xabar yuboring:")
+    await state.set_state(AuthState.admin_broadcast_message)
+
+@dp.message(F.text == "👨‍💼 Admin qo'shish")
+async def add_admin_prompt_msg(message: types.Message, state: FSMContext):
+    if not await is_admin(message.from_user.id):
+        await message.answer("❌ Siz admin emassiz!")
+        return
+    
+    logging.info(f"Admin add prompt triggered by {message.from_user.id}")
+    await message.answer("👨‍💼 **Yangi admin qo'shish**\n\nAdmin ID raqamini kiriting:")
+    await state.set_state(AuthState.add_admin_id)
+
+@dp.message(F.text == "👥 Admin ro'yxati")
+async def list_admins_msg(message: types.Message):
+    if not await is_admin(message.from_user.id):
+        await message.answer("❌ Siz admin emassiz!")
+        return
+    
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT admin_id, created_at FROM admins ORDER BY created_at DESC") as cursor:
+            admins = await cursor.fetchall()
+    
+    text = "👥 **Admin Ro'yxati**\n\n"
+    text += f"👑 Asosiy Admin: `{ADMIN_ID}`\n\n"
+    
+    if admins:
+        for admin_id, created_at in admins:
+            text += f"🔹 `{admin_id}` ({created_at.split()[0]})\n"
+    else:
+        text += "Qo'shimcha adminlar yo'q"
+    
+    await message.answer(text, parse_mode="Markdown")
+
+@dp.message(F.text == "📱 Akkauntga ulanish")
+async def admin_connect_account_msg(message: types.Message, state: FSMContext):
+    if not await is_admin(message.from_user.id):
+        await message.answer("❌ Siz admin emassiz!")
+        return
+    await prompt_phone(message, state)
+
+@dp.message(F.text == "🏠 Asosiy menu")
+async def admin_back_to_main(message: types.Message):
+    if not await is_admin(message.from_user.id):
+        await message.answer("❌ Siz admin emassiz!")
+        return
+    
+    client = await get_user_client(message.from_user.id)
+    is_connected = client is not None
+    await message.answer("🏠 **Asosiy boshqaruv paneli:**", reply_markup=await get_main_keyboard(message.from_user.id, is_connected=is_connected), parse_mode="Markdown")
 
 @dp.callback_query(F.data == "admin_stats")
 async def admin_stats(callback: types.CallbackQuery):
@@ -1531,45 +1682,6 @@ async def admin_stats(callback: types.CallbackQuery):
         f"📅 Bugungi sana: `{datetime.now().strftime('%Y-%m-%d')}`"
     )
     await callback.message.answer(text, parse_mode="Markdown")
-    await callback.answer()
-
-@dp.callback_query(F.data == "admin_users_list")
-async def admin_users_list(callback: types.CallbackQuery):
-    if not await is_admin(callback.from_user.id):
-        await callback.answer("❌ Siz admin emassiz!", show_alert=True)
-        return
-    
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT user_id, expiry_date FROM subscriptions") as cursor:
-            subs = await cursor.fetchall()
-    
-    text = "👥 **Foydalanuvchilar:**\n\n"
-    if not subs:
-        text += "Hozircha foydalanuvchilar yo'q."
-    else:
-        for uid, expiry in subs[:30]:
-            status = "🟢" if datetime.strptime(expiry, "%Y-%m-%d %H:%M:%S") > datetime.now() else "🔴"
-            text += f"{status} `{uid}` | {expiry.split()[0]}\n"
-    
-    await callback.message.answer(text, parse_mode="Markdown")
-    await callback.answer()
-
-@dp.callback_query(F.data == "admin_search")
-async def admin_search(callback: types.CallbackQuery, state: FSMContext):
-    if not await is_admin(callback.from_user.id):
-        await callback.answer("❌ Siz admin emassiz!", show_alert=True)
-        return
-    await callback.message.answer("🔍 Foydalanuvchi ID'sini kiriting:")
-    await state.set_state(AuthState.admin_search_user)
-    await callback.answer()
-
-@dp.callback_query(F.data == "admin_extend")
-async def admin_extend_btn(callback: types.CallbackQuery, state: FSMContext):
-    if not await is_admin(callback.from_user.id):
-        await callback.answer("❌ Siz admin emassiz!", show_alert=True)
-        return
-    await callback.message.answer("⏰ Obunasini uzaytirmoqchi bo'lgan foydalanuvchi ID'sini kiriting:")
-    await state.set_state(AuthState.admin_search_user)
     await callback.answer()
 
 @dp.message(AuthState.admin_search_user)
