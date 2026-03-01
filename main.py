@@ -1237,6 +1237,7 @@ async def show_profile(callback: types.CallbackQuery):
     )
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📊 Statistika", callback_data="main_stats"), InlineKeyboardButton(text="⚙️ Sozlamalar", callback_data="main_settings")],
         [InlineKeyboardButton(text="🔄 Akkauntni o'zgartirish", callback_data="main_relogin")],
         [InlineKeyboardButton(text="🚪 Chiqish", callback_data="main_logout")]
     ])
@@ -1249,9 +1250,79 @@ async def show_settings(callback: types.CallbackQuery):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⏱ Intervalni o'zgartirish", callback_data="main_interval")],
         [InlineKeyboardButton(text="🛑 Senderni to'xtatish", callback_data="main_stop_sender")],
-        [InlineKeyboardButton(text="💎 Obuna uzaytirish", callback_data="buy_pro")]
+        [InlineKeyboardButton(text="💎 Obuna uzaytirish", callback_data="user_extend_sub")],
+        [InlineKeyboardButton(text="🔙 Orqaga", callback_data="main_profile")]
     ])
     await callback.message.answer("⚙️ **Sozlamalar**", reply_markup=kb)
+    await callback.answer()
+
+@dp.callback_query(F.data == "user_extend_sub")
+async def user_extend_sub(callback: types.CallbackQuery, state: FSMContext):
+    """Foydalanuvchi o'z obunasini uzaytirish uchun"""
+    user_id = callback.from_user.id
+    await state.update_data(extend_user_id=user_id)
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔹 Start — 1 oy (50,000 so'm)", callback_data="extend_buy_start")],
+        [InlineKeyboardButton(text="🔹 Pro — 3 oy (120,000 so'm)", callback_data="extend_buy_3month")],
+        [InlineKeyboardButton(text="🔹 Pro — 6 oy (200,000 so'm)", callback_data="extend_buy_pro")],
+        [InlineKeyboardButton(text="🔹 VIP — 1 yil (350,000 so'm)", callback_data="extend_buy_year")],
+        [InlineKeyboardButton(text="🔹 VIP — Umrbod (500,000 so'm)", callback_data="extend_buy_vip")],
+        [InlineKeyboardButton(text="🔙 Bekor qilish", callback_data="main_settings")]
+    ])
+    
+    await callback.message.answer("💎 **Obuna uzaytirish uchun reja tanlang:**", reply_markup=kb, parse_mode="Markdown")
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("extend_buy_"))
+async def extend_buy_subscription(callback: types.CallbackQuery, state: FSMContext):
+    """Foydalanuvchi obunasini uzaytirish uchun to'lov"""
+    user_id = callback.from_user.id
+    client = await get_user_client(user_id)
+    
+    if not client:
+        await callback.answer("❌ Avval akkauntingizni ulashingiz kerak!", show_alert=True)
+        return
+
+    plan_key = callback.data.split("_")[2]
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT duration_days, price FROM pricing WHERE plan_type = ?", (plan_key,)) as cursor:
+            row = await cursor.fetchone()
+    
+    if not row:
+        await callback.answer("❌ Reja topilmadi!", show_alert=True)
+        return
+    
+    days, amount = row
+    plan_names = {
+        "start": "Start (1 oy)",
+        "3month": "Pro (3 oy)",
+        "pro": "Pro (6 oy)",
+        "year": "VIP (1 yil)",
+        "vip": "VIP (Umrbod)"
+    }
+    plan_name = plan_names.get(plan_key, "Noma'lum")
+    
+    await state.update_data(plan_type=plan_key, plan_name=plan_name, days=days, amount=amount)
+    
+    text = (
+        f"💳 **To'lov Tizimi**\n\n"
+        f"📦 Tanlangan reja: **{plan_name}**\n"
+        f"💰 Summa: **{amount:,} so'm**\n\n"
+        f"📝 **To'lov qilish:**\n"
+        f"1. Quyidagi raqamga pul o'tkazing\n"
+        f"2. Chekni rasm sifatida yuboring\n"
+        f"3. Admin tasdiqlashi kutib turing\n\n"
+        f"👤 Admin: @admin_username\n"
+        f"💳 Karta: 9860 12XX XXXX XXXX"
+    )
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📸 Chekni yuborish", callback_data=f"payment_screenshot_{plan_key}")],
+        [InlineKeyboardButton(text="❌ Bekor qilish", callback_data="cancel_payment")]
+    ])
+    
+    await callback.message.answer(text, reply_markup=kb, parse_mode="Markdown")
     await callback.answer()
 
 @dp.callback_query(F.data == "main_stop_sender")
@@ -1603,6 +1674,12 @@ async def show_pro_status(callback: types.CallbackQuery):
 @dp.callback_query(F.data == "buy_pro_menu")
 async def buy_pro_menu_handler(callback: types.CallbackQuery):
     await callback.message.edit_text("💎 **Obuna bo'lish uchun reja tanlang:**", reply_markup=get_subscription_keyboard(), parse_mode="Markdown")
+    await callback.answer()
+
+@dp.callback_query(F.data == "buy_pro")
+async def buy_pro_handler(callback: types.CallbackQuery):
+    """Settings'dan obuna uzaytirish uchun"""
+    await callback.message.answer("💎 **Obuna bo'lish uchun reja tanlang:**", reply_markup=get_subscription_keyboard(), parse_mode="Markdown")
     await callback.answer()
 
 @dp.message(Command("cancel"))
