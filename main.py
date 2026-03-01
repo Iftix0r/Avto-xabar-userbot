@@ -620,10 +620,14 @@ async def process_payment_screenshot(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     data = await state.get_data()
     
+    logging.info(f"Payment screenshot received from user {user_id}")
+    logging.info(f"State data: {data}")
+    
     # Rasmni saqlash
     photo = message.photo[-1]
     file_path = f"payments/{user_id}_{datetime.now().timestamp()}.jpg"
     await bot.download(photo, destination=file_path)
+    logging.info(f"Screenshot saved to {file_path}")
     
     # To'lov so'rovini bazaga qo'shish
     async with aiosqlite.connect(DB_PATH) as db:
@@ -683,6 +687,8 @@ async def process_payment_screenshot(message: types.Message, state: FSMContext):
     admin_ids = {ADMIN_ID}
     for (a_id,) in admins:
         admin_ids.add(a_id)
+    
+    logging.info(f"Sending payment notification to admins: {admin_ids}")
         
     for a_id in admin_ids:
         try:
@@ -690,14 +696,17 @@ async def process_payment_screenshot(message: types.Message, state: FSMContext):
             from aiogram.types import FSInputFile
             screenshot_file = FSInputFile(file_path)
             await bot.send_photo(a_id, photo=screenshot_file, caption=admin_text, reply_markup=kb, parse_mode="Markdown")
+            logging.info(f"Payment notification sent to admin {a_id}")
         except Exception as e:
-            logging.error(f"Error sending payment to admin {a_id}: {e}")
+            logging.error(f"Error sending payment photo to admin {a_id}: {e}")
             # Agar rasm yuborilmasa, matn yuborish
             try:
                 await bot.send_message(a_id, admin_text, reply_markup=kb, parse_mode="Markdown")
+                logging.info(f"Payment notification (text) sent to admin {a_id}")
             except Exception as e2:
-                logging.error(f"Error sending text to admin {a_id}: {e2}")
+                logging.error(f"Error sending payment text to admin {a_id}: {e2}")
     
+    await state.clear()
     await state.clear()
 
 @dp.callback_query(F.data.startswith("approve_payment_"))
@@ -1983,11 +1992,18 @@ async def process_add_admin(message: types.Message, state: FSMContext):
             return
         
         # Yangi admin qo'shish
-        await db.execute("""
-            INSERT INTO admins (admin_id, added_by, created_at)
-            VALUES (?, ?, ?)
-        """, (new_admin_id, message.from_user.id, datetime.now().isoformat()))
-        await db.commit()
+        try:
+            await db.execute("""
+                INSERT INTO admins (admin_id, added_by, created_at)
+                VALUES (?, ?, ?)
+            """, (new_admin_id, message.from_user.id, datetime.now().isoformat()))
+            await db.commit()
+            logging.info(f"New admin added: {new_admin_id} by {message.from_user.id}")
+        except Exception as e:
+            logging.error(f"Error adding admin: {e}")
+            await message.answer(f"❌ Xatolik: {e}")
+            await state.clear()
+            return
     
     await message.answer(f"✅ Foydalanuvchi `{new_admin_id}` admin qilib belgilandi!", parse_mode="Markdown")
     
@@ -1998,17 +2014,21 @@ async def process_add_admin(message: types.Message, state: FSMContext):
         logging.error(f"Failed to send message to new admin {new_admin_id}: {e}")
     
     await state.clear()
-    await message.answer("👑 **Admin Boshqaruv Paneli**", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+    
+    # Admin panel'ni qaytarish
+    kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📊 Statistika", callback_data="admin_stats")],
         [InlineKeyboardButton(text="👥 Foydalanuvchilar", callback_data="admin_users_list")],
         [InlineKeyboardButton(text="🔍 Qidirish", callback_data="admin_search")],
         [InlineKeyboardButton(text="⏰ Obuna uzaytirish", callback_data="admin_extend")],
+        [InlineKeyboardButton(text="💳 To'lov ma'lumotlari", callback_data="admin_payment_info")],
         [InlineKeyboardButton(text="💰 Narxlarni sozlash", callback_data="admin_pricing")],
         [InlineKeyboardButton(text="📢 Xabar yuborish", callback_data="admin_broadcast")],
         [InlineKeyboardButton(text="👨‍💼 Admin qo'shish", callback_data="admin_add_admin")],
         [InlineKeyboardButton(text="👥 Admin ro'yxati", callback_data="admin_list_admins")],
         [InlineKeyboardButton(text="📱 Akkauntga ulanish", callback_data="admin_connect_account")]
-    ]))
+    ])
+    await message.answer("👑 **Admin Boshqaruv Paneli**", reply_markup=kb, parse_mode="Markdown")
 
 @dp.callback_query(F.data == "admin_list_admins")
 async def list_admins(callback: types.CallbackQuery):
