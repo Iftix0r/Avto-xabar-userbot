@@ -633,11 +633,13 @@ async def process_payment_screenshot(message: types.Message, state: FSMContext):
         """, (user_id, data.get('plan_type'), data.get('amount'), file_path, datetime.now().isoformat()))
         await db.commit()
     
+    # Foydalanuvchiga xabar
     await message.answer(
-        f"✅ **Chek qabul qilindi!**\n\n"
+        f"✅ **So'rovingiz adminga yuborildi!**\n\n"
         f"📦 Reja: {data.get('plan_name')}\n"
         f"💰 Summa: {data.get('amount'):,} so'm\n\n"
-        f"⏳ Admin tasdiqlashi kutib turing...",
+        f"⏳ Admin tasdiqlashi kutib turing...\n"
+        f"Tasdiqlansa, obunangiz avtomatik faollashtiriladi.",
         parse_mode="Markdown"
     )
     
@@ -649,12 +651,22 @@ async def process_payment_screenshot(message: types.Message, state: FSMContext):
     except:
         amount_fmt = str(data.get('amount', '0'))
 
+    # Foydalanuvchi ma'lumotlarini olish
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT username, full_name FROM users WHERE user_id = ?", (user_id,)) as cursor:
+            user_info = await cursor.fetchone()
+    
+    username = user_info[0] if user_info and user_info[0] else "Noma'lum"
+    full_name = user_info[1] if user_info and user_info[1] else "Noma'lum"
+
     admin_text = (
         f"🔔 **Yangi To'lov So'rovi**\n\n"
         f"👤 Foydalanuvchi: `{user_id}`\n"
-        f"📦 Reja: {plan_name}\n"
-        f"💰 Summa: {amount_fmt} so'm\n\n"
-        f"Tasdiqlaysizmi?"
+        f"📝 Ism: {full_name}\n"
+        f"🔗 Username: @{username}\n"
+        f"📦 Reja: **{plan_name}**\n"
+        f"💰 Summa: **{amount_fmt} so'm**\n\n"
+        f"✅ Tasdiqlash uchun quyidagi tugmani bosing:"
     )
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
