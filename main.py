@@ -598,7 +598,7 @@ async def show_groups(callback: types.CallbackQuery):
         return await send_sub_msg(callback.message)
     
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT id, folder_name FROM groups WHERE user_id = ?", (user_id,)) as cursor:
+        async with db.execute("SELECT id, folder_name, group_ids FROM groups WHERE user_id = ?", (user_id,)) as cursor:
             groups = await cursor.fetchall()
     
     text = "📋 **Guruh Folderlar**\n\n"
@@ -606,16 +606,46 @@ async def show_groups(callback: types.CallbackQuery):
     if not groups:
         text += "Hozircha folder yo'q.\n\n"
     else:
-        for idx, (gid, folder_name) in enumerate(groups, 1):
-            text += f"{idx}. 📁 {folder_name}\n"
+        for idx, (gid, folder_name, group_ids) in enumerate(groups, 1):
+            count = len(group_ids.split(",")) if group_ids else 0
+            text += f"{idx}. 📁 {folder_name} ({count} guruh)\n"
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="➕ Folder qo'shish", callback_data="add_group")],
+        [InlineKeyboardButton(text="🗑 Folder o'chirish", callback_data="delete_group")],
         [InlineKeyboardButton(text="🔙 Orqaga", callback_data="main_profile")]
     ])
     
     await callback.message.answer(text, reply_markup=kb, parse_mode="Markdown")
     await callback.answer()
+
+@dp.callback_query(F.data == "delete_group")
+async def delete_group_prompt(callback: types.CallbackQuery, state: FSMContext):
+    user_id = callback.from_user.id
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT id, folder_name FROM groups WHERE user_id = ?", (user_id,)) as cursor:
+            groups = await cursor.fetchall()
+    
+    if not groups:
+        await callback.answer("❌ O'chirish uchun folder yo'q!", show_alert=True)
+        return
+
+    kb = []
+    for gid, folder_name in groups:
+        kb.append([InlineKeyboardButton(text=f"🗑 {folder_name}", callback_data=f"del_g_{gid}")])
+    kb.append([InlineKeyboardButton(text="🔙 Bekor qilish", callback_data="main_groups")])
+    
+    await callback.message.edit_text("🗑 **O'chirish uchun folderni tanlang:**", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("del_g_"))
+async def process_delete_group(callback: types.CallbackQuery):
+    group_id = int(callback.data.split("_")[-1])
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM groups WHERE id = ?", (group_id,))
+        await db.commit()
+    await callback.answer("✅ Folder o'chirildi!")
+    await show_groups(callback)
 
 @dp.callback_query(F.data == "add_group")
 async def add_group_prompt(callback: types.CallbackQuery, state: FSMContext):
@@ -628,14 +658,72 @@ async def process_group_name(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     folder_name = message.text.strip()
     
+    # Telegram folders check
+    client = await get_user_client(user_id)
+    found_groups = []
+    if client:
+        try:
+            from telethon.tl.functions.messages import GetDialogFiltersRequest
+            filters = await client(GetDialogFiltersRequest())
+            for f in filters:
+                if hasattr(f, 'title') and f.title.lower() == folder_name.lower():
+                    async for dialog in client.iter_dialogs(folder=f.id):
+                        if dialog.is_group or dialog.is_channel:
+                            found_groups.append(str(dialog.id))
+                    break
+        except Exception as e:
+            logging.error(f"Sync error: {e}")
+
+    group_ids = ",".join(found_groups)
+    
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
             INSERT INTO groups (user_id, folder_name, group_ids, created_at)
             VALUES (?, ?, ?, ?)
-        """, (user_id, folder_name, "", datetime.now().isoformat()))
+        """, (user_id, folder_name, group_ids, datetime.now().isoformat()))
         await db.commit()
     
-    await message.answer(f"✅ Folder qo'shildi: **{folder_name}**", parse_mode="Markdown")
+    if found_groups:
+        await message.answer(
+            f"✅ Folder qo'shildi: **{folder_name}**\n\n"
+            f"🔄 Telegramdan **{len(found_groups)}** ta guruh aniqlandi va avtomatik qo'shildi.",
+            parse_mode="Markdown"
+        )
+        await state.clear()
+    else:
+        await message.answer(
+            f"✅ Folder yaratildi: **{folder_name}**\n\n"
+            f"⚠️ Telegramdan bunday papka topilmadi.\n"
+            f"Endi shu folderga tegishli guruh IDlarini yuboring (har birini yangi qatordan) yoki hamma guruhlarni qo'shish uchun `/all` deb yozing:",
+            parse_mode="Markdown"
+        )
+        await state.update_data(current_folder_name=folder_name)
+        await state.set_state(AuthState.add_group_ids)
+
+@dp.message(AuthState.add_group_ids)
+async def process_group_ids(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    data = await state.get_data()
+    folder_name = data.get('current_folder_name')
+    
+    ids = []
+    if message.text == "/all":
+        client = await get_user_client(user_id)
+        if client:
+            await message.answer("🔄 Barcha guruhlar yig'ilmoqda, kuting...")
+            async for dialog in client.iter_dialogs():
+                if dialog.is_group or dialog.is_channel:
+                    ids.append(str(dialog.id))
+    else:
+        ids = [i.strip() for i in message.text.split("\n") if i.strip()]
+
+    group_ids = ",".join(ids)
+    
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE groups SET group_ids = ? WHERE user_id = ? AND folder_name = ?", (group_ids, user_id, folder_name))
+        await db.commit()
+    
+    await message.answer(f"✅ {len(ids)} ta guruh saqlandi!", reply_markup=get_main_keyboard(user_id, is_connected=True))
     await state.clear()
 
 # --- Reklama Matni va Rasm ---
@@ -755,8 +843,13 @@ async def start_sender(user_id):
 
     # Guruhlarni bazadan olish
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT folder_name FROM groups WHERE user_id = ?", (user_id,)) as cursor:
-            user_folders = [row[0].lower() for row in await cursor.fetchall()]
+        async with db.execute("SELECT folder_name, group_ids FROM groups WHERE user_id = ?", (user_id,)) as cursor:
+            rows = await cursor.fetchall()
+            user_folders = [r[0].lower() for r in rows]
+            manual_group_ids = {}
+            for row in rows:
+                if row[1]:
+                    manual_group_ids[row[0].lower()] = [int(gid) for gid in row[1].split(",") if gid]
 
     while data.get('is_running'):
         if not await check_subscription(user_id):
@@ -768,29 +861,36 @@ async def start_sender(user_id):
             for client in clients:
                 if not data.get('is_running'): break
                 
-                target_folder_ids = []
+                # Jo'natilishi kerak bo'lgan IDlar
+                final_target_ids = set()
+
                 if user_folders:
+                    # 1. Manual saqlangan IDlarni qo'shish
+                    for folder, ids in manual_group_ids.items():
+                        final_target_ids.update(ids)
+
+                    # 2. Telegram papkalarini tekshirish
                     try:
                         from telethon.tl.functions.messages import GetDialogFiltersRequest
                         filters = await client(GetDialogFiltersRequest())
                         for f in filters:
                             if hasattr(f, 'title') and f.title.lower() in user_folders:
-                                target_folder_ids.append(f.id)
+                                async for dialog in client.iter_dialogs(folder=f.id):
+                                    if dialog.is_group or dialog.is_channel:
+                                        final_target_ids.add(dialog.id)
                     except Exception as e:
                         logging.error(f"Error getting DialogFilters: {e}")
 
-                if user_folders and target_folder_ids:
-                    for folder_id in target_folder_ids:
+                if final_target_ids:
+                    for target_id in final_target_ids:
                         if not data.get('is_running'): break
-                        async for dialog in client.iter_dialogs(folder=folder_id):
-                            if not data.get('is_running'): break
-                            if dialog.is_group or dialog.is_channel:
-                                try:
-                                    await client.send_message(dialog.id, data['ad_text'])
-                                    await asyncio.sleep(15)
-                                except:
-                                    pass
+                        try:
+                            await client.send_message(target_id, data['ad_text'])
+                            await asyncio.sleep(15)
+                        except:
+                            pass
                 else:
+                    # Agar folderlar o'chirib tashlangan bo'lsa yoki bo'sh bo'lsa hammasiga yuboradi
                     async for dialog in client.iter_dialogs():
                         if not data.get('is_running'): break
                         if dialog.is_group or dialog.is_channel:
