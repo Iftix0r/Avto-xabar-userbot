@@ -10,7 +10,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from telethon import TelegramClient
-from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError, PasswordHashInvalidError
+from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError, PasswordHashInvalidError, AuthKeyDuplicatedError
 from dotenv import load_dotenv
 
 logging.basicConfig(level=logging.INFO)
@@ -216,19 +216,46 @@ async def send_sub_msg(message: types.Message):
     await message.answer(text, reply_markup=get_subscription_keyboard(), parse_mode="Markdown")
 
 # --- Client Helper ---
-async def get_user_client(user_id):
-    if user_id in users_data and 'client' in users_data[user_id]:
-        return users_data[user_id]['client']
+_active_clients = {}
+
+async def get_user_client(user_id, session_name=None):
+    key = f"sess_{user_id}" if not session_name else session_name
     
-    session_path = f"sessions/sess_{user_id}"
+    if key in _active_clients:
+        client = _active_clients[key]
+        if client.is_connected():
+            try:
+                if await client.is_user_authorized():
+                    return client
+            except Exception:
+                pass
+        # If not connected or authorized, try to clean up
+        try:
+            await client.disconnect()
+        except:
+            pass
+        del _active_clients[key]
+
+    session_path = f"sessions/{key}"
     if os.path.exists(session_path + ".session"):
         client = TelegramClient(session_path, API_ID, API_HASH)
-        await client.connect()
-        if await client.is_user_authorized():
-            if user_id not in users_data:
-                users_data[user_id] = {'is_running': False, 'interval': DEFAULT_AD_DELAY, 'ad_text': ''}
-            users_data[user_id]['client'] = client
-            return client
+        try:
+            await client.connect()
+            if await client.is_user_authorized():
+                _active_clients[key] = client
+                return client
+            else:
+                await client.disconnect()
+        except AuthKeyDuplicatedError:
+            logging.error(f"Duplicate session for {key}. Cleaning up.")
+            # Session is invalid, we might need to delete it but better let user relogin
+            try: await client.disconnect() 
+            except: pass
+        except Exception as e:
+            logging.error(f"Error connecting client {key}: {e}")
+            try: await client.disconnect() 
+            except: pass
+            
     return None
 
 def get_interval_keyboard():
@@ -419,11 +446,19 @@ async def process_payment_screenshot(message: types.Message, state: FSMContext):
         parse_mode="Markdown"
     )
     
+    # To'lov haqida xabar tayyorlash
+    try:
+        plan_name = data.get('plan_name', 'Noma`lum')
+        amount_val = data.get('amount', 0)
+        amount_fmt = f"{int(amount_val):,}" if amount_val else "0"
+    except:
+        amount_fmt = str(data.get('amount', '0'))
+
     admin_text = (
         f"🔔 **Yangi To'lov So'rovi**\n\n"
         f"👤 Foydalanuvchi: `{user_id}`\n"
-        f"📦 Reja: {data.get('plan_name', 'Noma`lum')}\n"
-        f"💰 Summa: {int(data.get('amount', 0)):,} so'm\n\n"
+        f"📦 Reja: {plan_name}\n"
+        f"💰 Summa: {amount_fmt} so'm\n\n"
         f"Tasdiqlaysizmi?"
     )
     
@@ -865,34 +900,21 @@ async def start_sender_handler(callback: types.CallbackQuery):
     
     # Barcha faol klientlarni yig'ish
     clients = []
-    main_session_path = f"sessions/sess_{user_id}"
-    if os.path.exists(main_session_path + ".session"):
-        c = TelegramClient(main_session_path, API_ID, API_HASH)
-        try:
-            await c.connect()
-            if await c.is_user_authorized():
-                clients.append(c)
-            else:
-                await c.disconnect()
-        except Exception as e:
-            logging.error(f"Main client error for {user_id}: {e}")
+    
+    # 1. Asosiy klient
+    c_main = await get_user_client(user_id)
+    if c_main:
+        clients.append(c_main)
             
+    # 2. Qo'shimcha profillar
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("SELECT session_name FROM profiles WHERE user_id = ? AND is_active = 1", (user_id,)) as cursor:
             profiles_db = await cursor.fetchall()
             
     for (session_name,) in profiles_db:
-        session_path = f"sessions/{session_name}"
-        if os.path.exists(session_path + ".session"):
-            c = TelegramClient(session_path, API_ID, API_HASH)
-            try:
-                await c.connect()
-                if await c.is_user_authorized():
-                    clients.append(c)
-                else:
-                    await c.disconnect()
-            except Exception as e:
-                logging.error(f"Profile client {session_name} error: {e}")
+        c_prof = await get_user_client(user_id, session_name=session_name)
+        if c_prof:
+            clients.append(c_prof)
                 
     if not clients:
         data['is_running'] = False
@@ -977,7 +999,10 @@ async def start_sender_handler(callback: types.CallbackQuery):
                     await db.commit()
                 break
 
-            logging.info(f"Cycle finished for {user_id}. Waiting {data['interval']} seconds.")
+            if total_sent > 0:
+                await bot.send_message(user_id, f"✅ Reklama tarqatish tsikli tugadi. **{total_sent}** ta guruhga yuborildi.\n⏱ Navbatdagi tsikl {data['interval']} soniyadan keyin boshlanadi.", parse_mode="Markdown")
+
+            logging.info(f"Cycle finished for {user_id}. Sent: {total_sent}. Waiting {data['interval']} seconds.")
             for _ in range(data['interval']):
                 if not data.get('is_running'): break
                 await asyncio.sleep(1)
@@ -1363,19 +1388,32 @@ async def show_pro_status(callback: types.CallbackQuery):
 async def show_stats(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     
-    status = "Ishlamoqda" if users_data.get(user_id, {}).get('is_running') else "To'xtatilgan"
+    status_emoji = "🟢 Ishlamoqda" if users_data.get(user_id, {}).get('is_running') else "🔴 To'xtatilgan"
     interval = users_data.get(user_id, {}).get('interval', DEFAULT_AD_DELAY)
     ad_text = users_data.get(user_id, {}).get('ad_text', '')
     
+    # Profillar sonini aniqlash
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT COUNT(*) FROM profiles WHERE user_id = ?", (user_id,)) as cursor:
+            profiles_count = (await cursor.fetchone())[0]
+        async with db.execute("SELECT COUNT(*) FROM groups WHERE user_id = ?", (user_id,)) as cursor:
+            groups_count = (await cursor.fetchone())[0]
+
     text = (
-        f"📊 **Shaxsiy Statistika**\n\n"
-        f"🔹 Holat: `{status}`\n"
+        f"📊 **Sender Statistikasi**\n\n"
+        f"🔹 Holat: **{status_emoji}**\n"
         f"⏱ Interval: `{interval} sekund`\n"
         f"📝 Reklama: {'✅ Sozlangan' if ad_text else '❌ Yo`q'}\n"
-        f"👥 Profillar: `{len(users_data.get(user_id, {}).get('profiles', []))} ta`"
+        f"📱 Ulangan akkauntlar: `{profiles_count + 1} ta`\n"
+        f"📁 Folderlar: `{groups_count} ta`"
     )
     
-    await callback.message.answer(text, parse_mode="Markdown")
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔄 Yangilash", callback_data="main_stats")],
+        [InlineKeyboardButton(text="🔙 Orqaga", callback_data="main_profile")]
+    ])
+    
+    await callback.message.answer(text, reply_markup=kb, parse_mode="Markdown")
     await callback.answer()
 
 

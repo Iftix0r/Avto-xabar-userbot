@@ -3,18 +3,18 @@
 # Papka ichiga kirish
 cd "$(dirname "$0")"
 
+echo "Bot to'xtatilmoqda..."
+
+# 1. PID orqali to'xtatish
 if [ -f "bot.pid" ]; then
     PID=$(cat bot.pid)
-    echo "Bot to'xtatilmoqda (PID: $PID)..."
-    
     if ps -p $PID > /dev/null; then
         kill $PID
-        rm bot.pid
-        echo "✅ Bot muvaffaqiyatli to'xtatildi."
-    else
-        echo "⚠️ Jarayon topilmadi, lekin pid fayli o'chirildi."
-        rm bot.pid
+        echo "✅ Bot (PID: $PID) to'xtatildi."
     fi
-else
-    echo "❌ bot.pid fayli topilmadi. Bot ishlamayotgan bo'lishi mumkin."
+    rm bot.pid
 fi
+
+# 2. Qolgan main.py jarayonlarini ham o'chirish
+pkill -f main.py
+echo "✅ Barcha main.py jarayonlari to'xtatildi."
