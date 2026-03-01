@@ -5,6 +5,10 @@
 *.log
 bot.log
 
+# Database
+bot_database.db
+*.db
+
 # Session fayllar
 sessions/
 *.session

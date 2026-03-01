@@ -222,10 +222,9 @@ async def get_main_keyboard(user_id, is_connected=False):
     # Faqat obunasi borlarga boshqaruv tugmalarini ko'rsatamiz
     if has_sub:
         kb.extend([
-            [InlineKeyboardButton(text="👥 Profillar", callback_data="main_profillar"), InlineKeyboardButton(text="📊 Statistika", callback_data="main_stats")],
-            [InlineKeyboardButton(text="💬 Xabar matni", callback_data="main_xabar"), InlineKeyboardButton(text="📋 Guruhlar", callback_data="main_groups")],
+            [InlineKeyboardButton(text="👥 Profillar", callback_data="main_profillar"), InlineKeyboardButton(text="💬 Xabar matni", callback_data="main_xabar")],
+            [InlineKeyboardButton(text="📋 Guruhlar", callback_data="main_groups"), InlineKeyboardButton(text="📊 Statistika", callback_data="main_stats")],
             [InlineKeyboardButton(text="▶️ Ishga tushirish", callback_data="main_start_sender"), InlineKeyboardButton(text="⏱ Interval", callback_data="main_interval")],
-            [InlineKeyboardButton(text="⭐ Pro status", callback_data="main_pro")],
             [InlineKeyboardButton(text="👤 Profil", callback_data="main_profile"), InlineKeyboardButton(text="⚙️ Sozlamalar", callback_data="main_settings")]
         ])
     
@@ -1296,7 +1295,7 @@ async def show_profile(callback: types.CallbackQuery):
     )
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📊 Statistika", callback_data="main_stats"), InlineKeyboardButton(text="⚙️ Sozlamalar", callback_data="main_settings")],
+        [InlineKeyboardButton(text="⚙️ Sozlamalar", callback_data="main_settings")],
         [InlineKeyboardButton(text="🔄 Akkauntni o'zgartirish", callback_data="main_relogin")],
         [InlineKeyboardButton(text="🚪 Chiqish", callback_data="main_logout")]
     ])
@@ -1798,6 +1797,11 @@ async def cancel_handler(message: types.Message, state: FSMContext):
 async def show_stats(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     
+    # Faqat admin uchun
+    if not await is_admin(user_id):
+        await callback.answer("❌ Bu xizmat faqat admin uchun!", show_alert=True)
+        return
+    
     status_emoji = "🟢 Ishlamoqda" if users_data.get(user_id, {}).get('is_running') else "🔴 To'xtatilgan"
     interval = users_data.get(user_id, {}).get('interval', DEFAULT_AD_DELAY)
     ad_text = users_data.get(user_id, {}).get('ad_text', '')
@@ -1822,7 +1826,7 @@ async def show_stats(callback: types.CallbackQuery):
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔄 Yangilash", callback_data="main_stats")],
-        [InlineKeyboardButton(text="🔙 Orqaga", callback_data="main_profile")]
+        [InlineKeyboardButton(text="🔙 Orqaga", callback_data="main_admin")]
     ])
     
     await callback.message.answer(text, reply_markup=kb, parse_mode="Markdown")
