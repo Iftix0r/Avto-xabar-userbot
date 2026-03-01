@@ -581,7 +581,7 @@ async def process_add_profile_phone(message: types.Message, state: FSMContext):
     session_name = f"profile_{user_id}_{int(datetime.now().timestamp())}"
     session_path = f"sessions/{session_name}"
     
-    await message.answer("Tekshirilmoqda...", reply_markup=types.ReplyKeyboardRemove())
+    await message.answer("🔍 **Tekshirilmoqda...**", reply_markup=types.ReplyKeyboardRemove(), parse_mode="Markdown")
     client = TelegramClient(session_path, API_ID, API_HASH)
     
     try:
@@ -593,27 +593,45 @@ async def process_add_profile_phone(message: types.Message, state: FSMContext):
             profile_session_name=session_name,
             profile_phone_code_hash=sent_code.phone_code_hash
         )
-        await client.disconnect()
         
-        await message.answer("📩 **Tasdiqlash kodi yuborildi.**\nKodni vergul bilan ajratib yuboring (Masalan: `1,2,3,4,5`):", parse_mode="Markdown")
+        # Don't disconnect here, keep it in shared storage or we'll have to reconnect with same session
+        if user_id not in users_data:
+            users_data[user_id] = {}
+        users_data[user_id][f"temp_client_{session_name}"] = client
+        
+        await message.answer(
+            f"📩 **Tasdiqlash kodi yuborildi.**\n\n"
+            f"Raqam: `{phone}`\n"
+            f"Kodni vergul bilan ajratib yuboring (Masalan: `1,2,3,4,5`):", 
+            parse_mode="Markdown"
+        )
         await state.set_state(AuthState.add_profile_code)
     except Exception as e:
         await message.answer(f"❌ Xatolik: {e}")
-        await client.disconnect()
+        try: await client.disconnect()
+        except: pass
         await state.clear()
 
 @dp.message(AuthState.add_profile_code)
 async def process_add_profile_code(message: types.Message, state: FSMContext):
     data = await state.get_data()
-    saved_code = data.get('profile_saved_code')
-    phone = data['profile_phone']
-    session_name = data['profile_session_name']
-    phone_code_hash = data['profile_phone_code_hash']
+    phone = data.get('profile_phone')
+    session_name = data.get('profile_session_name')
+    phone_code_hash = data.get('profile_phone_code_hash')
+    saved_2fa = data.get('profile_saved_2fa') # If already requested
     
     user_id = message.from_user.id
-    session_path = f"sessions/{session_name}"
-    client = TelegramClient(session_path, API_ID, API_HASH)
-    await client.connect()
+    temp_key = f"temp_client_{session_name}"
+    
+    # Get existing client or reconnect
+    if user_id in users_data and temp_key in users_data[user_id]:
+        client = users_data[user_id][temp_key]
+    else:
+        session_path = f"sessions/{session_name}"
+        client = TelegramClient(session_path, API_ID, API_HASH)
+        await client.connect()
+        if user_id not in users_data: users_data[user_id] = {}
+        users_data[user_id][temp_key] = client
 
     async def finish_auth():
         async with aiosqlite.connect(DB_PATH) as db:
@@ -622,31 +640,42 @@ async def process_add_profile_code(message: types.Message, state: FSMContext):
                 VALUES (?, ?, ?, ?)
             """, (user_id, phone, session_name, datetime.now().isoformat()))
             await db.commit()
-        await message.answer(f"✅ Profil qo'shildi: `{phone}`", parse_mode="Markdown")
-        await client.disconnect()
+        await message.answer(f"✅ **Profil qo'shildi:** `{phone}`", parse_mode="Markdown")
+        try: await client.disconnect()
+        except: pass
+        if temp_key in users_data.get(user_id, {}):
+            del users_data[user_id][temp_key]
         await state.clear()
 
-    if saved_code:
+    if saved_2fa:
         try:
             await client.sign_in(password=message.text.strip())
             await finish_auth()
         except Exception as e:
-            await message.answer(f"❌ Xato: {e}")
-            await client.disconnect()
+            await message.answer(f"❌ Xato (2FA): {e}")
         return
 
+    # Process code
     code = "".join(message.text.replace(" ", "").split(","))
+    if not code.isdigit():
+        await message.answer("❌ Noto'g'ri format! Kodni kiriting (Masalan: `1,2,3,4,5` yoki `12345`):")
+        return
+
     try:
         await client.sign_in(phone, code, phone_code_hash=phone_code_hash)
         await finish_auth()
     except SessionPasswordNeededError:
-        await state.update_data(profile_saved_code=code)
-        await message.answer("🔑 2FA Parolni yuboring:")
-        await client.disconnect()
+        await state.update_data(profile_saved_2fa=True)
+        await message.answer("🔑 **2FA Parol talab qilinadi.**\nParolni yuboring:")
     except Exception as e:
         await message.answer(f"❌ Xato: {e}")
-        await client.disconnect()
-        await state.clear()
+        # Only clear if it's a fatal error, otherwise let them try again
+        if "expired" in str(e).lower() or "invalid" in str(e).lower():
+            try: await client.disconnect()
+            except: pass
+            if temp_key in users_data.get(user_id, {}):
+                del users_data[user_id][temp_key]
+            await state.clear()
 
 # --- Guruhlar Tizimi ---
 @dp.callback_query(F.data == "main_groups")
