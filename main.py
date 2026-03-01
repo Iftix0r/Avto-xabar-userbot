@@ -995,7 +995,7 @@ async def process_group_ids(message: types.Message, state: FSMContext):
 # --- Reklama Matni va Rasm ---
 @dp.callback_query(F.data == "main_xabar")
 async def set_ad_text(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.answer("📝 **Reklama xabaringizni yuboring.**\n\nSiz matn, rasm+matn, video+matn yoki ovozli xabar yuborishingiz mumkin. Bot aynan shu ko'rinishda tarqatadi.")
+    await callback.message.answer("📝 **Reklama xabaringizni yuboring.**\n\n✅ Quyidagilarni yuborishingiz mumkin:\n• Faqat matn\n• Rasm + matn\n• Video + matn\n• Ovozli xabar + matn\n\nBot aynan shu ko'rinishda tarqatadi.")
     await state.set_state(AuthState.ad_text)
     await callback.answer()
 
@@ -1747,35 +1747,7 @@ async def main():
 if __name__ == "__main__":
     asyncio.run(main())
 
-# --- Pro Status (Rasm yuborish) ---
-@dp.callback_query(F.data == "main_pro")
-async def show_pro_status(callback: types.CallbackQuery):
-    user_id = callback.from_user.id
-    
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT plan_type FROM subscriptions WHERE user_id = ?", (user_id,)) as cursor:
-            row = await cursor.fetchone()
-    
-    plan = row[0] if row else "free"
-    
-    text = (
-        f"⭐ **Premium Status**\n\n"
-        f"📦 Sizning reja: **{plan.upper()}**\n\n"
-        f"✨ **Imkoniyatlar:**\n"
-        f"✅ Cheksiz guruhlar\n"
-        f"✅ Rasm/Video/Ovoz bilan reklama\n"
-        f"✅ Avtomatik yuborish\n"
-        f"✅ Prioritet qo'llab-quvvatlash"
-    )
-    
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💎 Obuna bo'lish / Yangilash", callback_data="buy_pro_menu")],
-        [InlineKeyboardButton(text="📝 Media xabar sozlash", callback_data="main_xabar")],
-        [InlineKeyboardButton(text="🔙 Orqaga", callback_data="main_profile")]
-    ])
-    
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
-    await callback.answer()
+# --- Pro Status o'chirildi, xabar matni bo'limiga media qo'shish imkoniyati qo'shildi ---
 
 @dp.callback_query(F.data == "buy_pro_menu")
 async def buy_pro_menu_handler(callback: types.CallbackQuery):
