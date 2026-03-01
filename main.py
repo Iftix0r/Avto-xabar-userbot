@@ -1736,6 +1736,8 @@ async def add_admin_prompt(callback: types.CallbackQuery, state: FSMContext):
 @dp.message(AuthState.add_admin_id)
 async def process_add_admin(message: types.Message, state: FSMContext):
     if not await is_admin(message.from_user.id):
+        await message.answer("❌ Siz admin emassiz!")
+        await state.clear()
         return
     
     try:
@@ -1750,7 +1752,7 @@ async def process_add_admin(message: types.Message, state: FSMContext):
             existing = await cursor.fetchone()
         
         if existing:
-            await message.answer(f"❌ Foydalanuvchi `{new_admin_id}` allaqachon admin!")
+            await message.answer(f"❌ Foydalanuvchi `{new_admin_id}` allaqachon admin!", parse_mode="Markdown")
             await state.clear()
             return
         
@@ -1766,10 +1768,21 @@ async def process_add_admin(message: types.Message, state: FSMContext):
     # Yangi admin'ga xabar
     try:
         await bot.send_message(new_admin_id, "🎉 **Siz admin qilib belgilandi!**\n\nAdmin panel uchun `/start` yuboring.", parse_mode="Markdown")
-    except:
-        pass
+    except Exception as e:
+        logging.error(f"Failed to send message to new admin {new_admin_id}: {e}")
     
     await state.clear()
+    await message.answer("👑 **Admin Boshqaruv Paneli**", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📊 Statistika", callback_data="admin_stats")],
+        [InlineKeyboardButton(text="👥 Foydalanuvchilar", callback_data="admin_users_list")],
+        [InlineKeyboardButton(text="🔍 Qidirish", callback_data="admin_search")],
+        [InlineKeyboardButton(text="⏰ Obuna uzaytirish", callback_data="admin_extend")],
+        [InlineKeyboardButton(text="💰 Narxlarni sozlash", callback_data="admin_pricing")],
+        [InlineKeyboardButton(text="📢 Xabar yuborish", callback_data="admin_broadcast")],
+        [InlineKeyboardButton(text="👨‍💼 Admin qo'shish", callback_data="admin_add_admin")],
+        [InlineKeyboardButton(text="👥 Admin ro'yxati", callback_data="admin_list_admins")],
+        [InlineKeyboardButton(text="📱 Akkauntga ulanish", callback_data="admin_connect_account")]
+    ]))
 
 @dp.callback_query(F.data == "admin_list_admins")
 async def list_admins(callback: types.CallbackQuery):
