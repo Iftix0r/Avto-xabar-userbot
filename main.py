@@ -236,7 +236,7 @@ def get_subscription_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔹 Start — 1 oy (50,000 so'm)", callback_data="buy_start")],
         [InlineKeyboardButton(text="🔹 Pro — 3 oy (120,000 so'm)", callback_data="buy_3month")],
-        [InlineKeyboardButton(text="🔹 Pro — 6 oy (200,000 so'm)", callback_data="buy_pro")],
+        [InlineKeyboardButton(text="🔹 Pro — 6 oy (200,000 so'm)", callback_data="buy_pro_plan")],
         [InlineKeyboardButton(text="🔹 VIP — 1 yil (350,000 so'm)", callback_data="buy_year")],
         [InlineKeyboardButton(text="🔹 VIP — Umrbod (500,000 so'm)", callback_data="buy_vip")],
         [InlineKeyboardButton(text="👤 Admin bilan bog'lanish", url=f"tg://user?id={ADMIN_ID}")]
@@ -441,6 +441,10 @@ async def process_auth_step(message: types.Message, state: FSMContext):
 # --- To'lov Tizimi ---
 @dp.callback_query(F.data.startswith("buy_"))
 async def buy_subscription(callback: types.CallbackQuery, state: FSMContext):
+    # extend_buy_ callback'larini o'tkazib yuborish
+    if callback.data.startswith("extend_buy_"):
+        return
+    
     user_id = callback.from_user.id
     client = await get_user_client(user_id)
     
@@ -478,6 +482,50 @@ async def buy_subscription(callback: types.CallbackQuery, state: FSMContext):
         "vip": "VIP (Umrbod)"
     }
     plan_name = plan_names.get(plan_key, "Noma'lum")
+    
+    await state.update_data(plan_type=plan_key, plan_name=plan_name, days=days, amount=amount)
+    
+    text = (
+        f"💳 **To'lov Tizimi**\n\n"
+        f"📦 Tanlangan reja: **{plan_name}**\n"
+        f"💰 Summa: **{amount:,} so'm**\n\n"
+        f"📝 **To'lov qilish:**\n"
+        f"1. Quyidagi raqamga pul o'tkazing\n"
+        f"2. Chekni rasm sifatida yuboring\n"
+        f"3. Admin tasdiqlashi kutib turing\n\n"
+        f"👤 Admin: @admin_username\n"
+        f"💳 Karta: 9860 12XX XXXX XXXX"
+    )
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📸 Chekni yuborish", callback_data=f"payment_screenshot_{plan_key}")],
+        [InlineKeyboardButton(text="❌ Bekor qilish", callback_data="cancel_payment")]
+    ])
+    
+    await callback.message.answer(text, reply_markup=kb, parse_mode="Markdown")
+    await callback.answer()
+
+@dp.callback_query(F.data == "buy_pro_plan")
+async def buy_pro_plan_handler(callback: types.CallbackQuery, state: FSMContext):
+    """Obuna keyboard'idan Pro (6 oy) rejasini tanlash"""
+    user_id = callback.from_user.id
+    client = await get_user_client(user_id)
+    
+    if not client:
+        await callback.answer("❌ Avval akkauntingizni ulashingiz kerak!", show_alert=True)
+        return
+
+    plan_key = "pro"
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT duration_days, price FROM pricing WHERE plan_type = ?", (plan_key,)) as cursor:
+            row = await cursor.fetchone()
+    
+    if not row:
+        await callback.answer("❌ Reja topilmadi!", show_alert=True)
+        return
+    
+    days, amount = row
+    plan_name = "Pro (6 oy)"
     
     await state.update_data(plan_type=plan_key, plan_name=plan_name, days=days, amount=amount)
     
