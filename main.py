@@ -1573,6 +1573,11 @@ async def user_extend_days(callback: types.CallbackQuery, state: FSMContext):
     plan_name = data.get('plan_name')
     amount = data.get('amount')
     
+    # Agar state'da ma'lumot bo'lmasa, xatolik
+    if not plan_type or not plan_name or not amount:
+        await callback.answer("❌ Xatolik! Qayta urinib ko'ring.", show_alert=True)
+        return
+    
     await state.update_data(plan_type=plan_type, plan_name=plan_name, days=days, amount=amount)
     
     text = (
@@ -1592,7 +1597,7 @@ async def user_extend_days(callback: types.CallbackQuery, state: FSMContext):
         [InlineKeyboardButton(text="❌ Bekor qilish", callback_data="cancel_payment")]
     ])
     
-    await callback.message.answer(text, reply_markup=kb, parse_mode="Markdown")
+    await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("admin_remove_sub_"))
