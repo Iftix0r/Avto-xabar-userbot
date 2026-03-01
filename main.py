@@ -1693,7 +1693,11 @@ async def list_admins_msg(message: types.Message):
     
     if admins:
         for admin_id, created_at in admins:
-            text += f"🔹 `{admin_id}` ({created_at.split()[0]})\n"
+            if created_at:
+                date = created_at.split()[0] if isinstance(created_at, str) else str(created_at).split()[0]
+                text += f"🔹 `{admin_id}` ({date})\n"
+            else:
+                text += f"🔹 `{admin_id}` (Sana noma'lum)\n"
     else:
         text += "Qo'shimcha adminlar yo'q"
     
@@ -2168,8 +2172,11 @@ async def list_admins(callback: types.CallbackQuery):
     else:
         text += "**Qo'shimcha Adminlar:**\n"
         for admin_id, created_at in admins:
-            date = created_at.split("T")[0]
-            text += f"🔹 `{admin_id}` (Qo'shilgan: {date})\n"
+            if created_at:
+                date = created_at.split("T")[0] if isinstance(created_at, str) else str(created_at).split("T")[0]
+                text += f"🔹 `{admin_id}` (Qo'shilgan: {date})\n"
+            else:
+                text += f"🔹 `{admin_id}` (Sana noma'lum)\n"
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🗑 Admin o'chirish", callback_data="admin_remove_admin")],
