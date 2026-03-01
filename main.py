@@ -59,6 +59,17 @@ async def init_db():
             )
         """)
         
+        # Migration: plan_type column'ini qo'shish (agar bo'lmasa)
+        try:
+            await db.execute("ALTER TABLE subscriptions ADD COLUMN plan_type TEXT DEFAULT 'free'")
+            await db.commit()
+            logging.info("Added plan_type column to subscriptions table")
+        except Exception as e:
+            if "duplicate column name" in str(e):
+                logging.info("plan_type column already exists")
+            else:
+                logging.error(f"Error adding plan_type column: {e}")
+        
         await db.execute("""
             CREATE TABLE IF NOT EXISTS profiles (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1352,6 +1363,7 @@ async def extend_buy_subscription(callback: types.CallbackQuery, state: FSMConte
     plan_name = plan_names.get(plan_key, "Noma'lum")
     
     await state.update_data(plan_type=plan_key, plan_name=plan_name, days=days, amount=amount)
+    logging.info(f"State updated for user {user_id}: plan_type={plan_key}, plan_name={plan_name}, amount={amount}")
     
     # Mudat tanlash uchun tugmalar
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -1568,13 +1580,18 @@ async def user_extend_days(callback: types.CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
     days = int(callback.data.split("_")[-1])
     
+    logging.info(f"user_extend_days called for user {user_id} with days={days}")
+    
     data = await state.get_data()
     plan_type = data.get('plan_type')
     plan_name = data.get('plan_name')
     amount = data.get('amount')
     
+    logging.info(f"State data: plan_type={plan_type}, plan_name={plan_name}, amount={amount}")
+    
     # Agar state'da ma'lumot bo'lmasa, xatolik
     if not plan_type or not plan_name or not amount:
+        logging.error(f"State data missing for user {user_id}: plan_type={plan_type}, plan_name={plan_name}, amount={amount}")
         await callback.answer("❌ Xatolik! Qayta urinib ko'ring.", show_alert=True)
         return
     
@@ -1597,7 +1614,12 @@ async def user_extend_days(callback: types.CallbackQuery, state: FSMContext):
         [InlineKeyboardButton(text="❌ Bekor qilish", callback_data="cancel_payment")]
     ])
     
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+    try:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+    except Exception as e:
+        logging.error(f"Error editing message: {e}")
+        await callback.message.answer(text, reply_markup=kb, parse_mode="Markdown")
+    
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("admin_remove_sub_"))
