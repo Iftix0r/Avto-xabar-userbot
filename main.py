@@ -1625,6 +1625,59 @@ async def add_admin_prompt_msg(message: types.Message, state: FSMContext):
     await message.answer("👨‍💼 **Yangi admin qo'shish**\n\nAdmin ID raqamini kiriting:")
     await state.set_state(AuthState.add_admin_id)
 
+@dp.message(AuthState.add_admin_id)
+async def process_add_admin(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    logging.info(f"Admin add message received from {user_id}: {message.text}")
+    
+    if not await is_admin(user_id):
+        await message.answer("❌ Siz admin emassiz!")
+        await state.clear()
+        return
+    
+    try:
+        new_admin_id = int(message.text.strip())
+    except ValueError:
+        await message.answer("❌ Noto'g'ri format! Faqat raqam kiriting.")
+        return
+    
+    # Tekshirish - allaqachon admin bo'lsa
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT admin_id FROM admins WHERE admin_id = ?", (new_admin_id,)) as cursor:
+            existing = await cursor.fetchone()
+        
+        if existing:
+            await message.answer(f"❌ Foydalanuvchi `{new_admin_id}` allaqachon admin!", parse_mode="Markdown")
+            await state.clear()
+            return
+        
+        # Yangi admin qo'shish
+        try:
+            await db.execute("""
+                INSERT INTO admins (admin_id, added_by, created_at)
+                VALUES (?, ?, ?)
+            """, (new_admin_id, message.from_user.id, datetime.now().isoformat()))
+            await db.commit()
+            logging.info(f"New admin added: {new_admin_id} by {message.from_user.id}")
+        except Exception as e:
+            logging.error(f"Error adding admin: {e}")
+            await message.answer(f"❌ Xatolik: {e}")
+            await state.clear()
+            return
+    
+    await message.answer(f"✅ Foydalanuvchi `{new_admin_id}` admin qilib belgilandi!", parse_mode="Markdown")
+    
+    # Yangi admin'ga xabar
+    try:
+        await bot.send_message(new_admin_id, "🎉 **Siz admin qilib belgilandi!**\n\nAdmin panel uchun `/start` yuboring.", parse_mode="Markdown")
+    except Exception as e:
+        logging.error(f"Failed to send message to new admin {new_admin_id}: {e}")
+    
+    await state.clear()
+    
+    # Admin panel'ni qaytarish
+    await show_admin_panel(message)
+
 @dp.message(F.text == "👥 Admin ro'yxati")
 async def list_admins_msg(message: types.Message):
     if not await is_admin(message.from_user.id):
@@ -2095,81 +2148,7 @@ async def show_stats(callback: types.CallbackQuery):
 
 
 # --- Admin Qo'shish ---
-@dp.callback_query(F.data == "admin_add_admin")
-async def add_admin_prompt(callback: types.CallbackQuery, state: FSMContext):
-    if not await is_admin(callback.from_user.id):
-        await callback.answer("❌ Siz admin emassiz!", show_alert=True)
-        return
-    
-    logging.info(f"Admin add prompt triggered by {callback.from_user.id}")
-    await callback.message.answer("👨‍💼 **Yangi admin qo'shish**\n\nAdmin ID raqamini kiriting:")
-    await state.set_state(AuthState.add_admin_id)
-    await callback.answer()
-
-@dp.message(AuthState.add_admin_id)
-async def process_add_admin(message: types.Message, state: FSMContext):
-    user_id = message.from_user.id
-    logging.info(f"Admin add message received from {user_id}: {message.text}")
-    
-    if not await is_admin(user_id):
-        await message.answer("❌ Siz admin emassiz!")
-        await state.clear()
-        return
-    
-    try:
-        new_admin_id = int(message.text.strip())
-    except ValueError:
-        await message.answer("❌ Noto'g'ri format! Faqat raqam kiriting.")
-        return
-    
-    # Tekshirish - allaqachon admin bo'lsa
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT admin_id FROM admins WHERE admin_id = ?", (new_admin_id,)) as cursor:
-            existing = await cursor.fetchone()
-        
-        if existing:
-            await message.answer(f"❌ Foydalanuvchi `{new_admin_id}` allaqachon admin!", parse_mode="Markdown")
-            await state.clear()
-            return
-        
-        # Yangi admin qo'shish
-        try:
-            await db.execute("""
-                INSERT INTO admins (admin_id, added_by, created_at)
-                VALUES (?, ?, ?)
-            """, (new_admin_id, message.from_user.id, datetime.now().isoformat()))
-            await db.commit()
-            logging.info(f"New admin added: {new_admin_id} by {message.from_user.id}")
-        except Exception as e:
-            logging.error(f"Error adding admin: {e}")
-            await message.answer(f"❌ Xatolik: {e}")
-            await state.clear()
-            return
-    
-    await message.answer(f"✅ Foydalanuvchi `{new_admin_id}` admin qilib belgilandi!", parse_mode="Markdown")
-    
-    # Yangi admin'ga xabar
-    try:
-        await bot.send_message(new_admin_id, "🎉 **Siz admin qilib belgilandi!**\n\nAdmin panel uchun `/start` yuboring.", parse_mode="Markdown")
-    except Exception as e:
-        logging.error(f"Failed to send message to new admin {new_admin_id}: {e}")
-    
-    await state.clear()
-    
-    # Admin panel'ni qaytarish
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📊 Statistika", callback_data="admin_stats")],
-        [InlineKeyboardButton(text="👥 Foydalanuvchilar", callback_data="admin_users_list")],
-        [InlineKeyboardButton(text="🔍 Qidirish", callback_data="admin_search")],
-        [InlineKeyboardButton(text="⏰ Obuna uzaytirish", callback_data="admin_extend")],
-        [InlineKeyboardButton(text="💳 To'lov ma'lumotlari", callback_data="admin_payment_info")],
-        [InlineKeyboardButton(text="💰 Narxlarni sozlash", callback_data="admin_pricing")],
-        [InlineKeyboardButton(text="📢 Xabar yuborish", callback_data="admin_broadcast")],
-        [InlineKeyboardButton(text="👨‍💼 Admin qo'shish", callback_data="admin_add_admin")],
-        [InlineKeyboardButton(text="👥 Admin ro'yxati", callback_data="admin_list_admins")],
-        [InlineKeyboardButton(text="📱 Akkauntga ulanish", callback_data="admin_connect_account")]
-    ])
-    await message.answer("👑 **Admin Boshqaruv Paneli**", reply_markup=kb, parse_mode="Markdown")
+# (Message handlers allaqachon qo'shilgan - ular admin panel menu'dan ishlatiladi)
 
 @dp.callback_query(F.data == "admin_list_admins")
 async def list_admins(callback: types.CallbackQuery):
