@@ -707,7 +707,6 @@ async def process_payment_screenshot(message: types.Message, state: FSMContext):
                 logging.error(f"Error sending payment text to admin {a_id}: {e2}")
     
     await state.clear()
-    await state.clear()
 
 @dp.callback_query(F.data.startswith("approve_payment_"))
 async def approve_payment(callback: types.CallbackQuery):
@@ -1497,7 +1496,7 @@ async def show_admin_panel(message: types.Message):
         [InlineKeyboardButton(text="👥 Admin ro'yxati", callback_data="admin_list_admins")],
         [InlineKeyboardButton(text="📱 Akkauntga ulanish", callback_data="admin_connect_account")]
     ])
-    await message.answer("👑 **Admin Boshqaruv Paneli**", reply_markup=kb)
+    await message.answer("👑 **Admin Boshqaruv Paneli**", reply_markup=kb, parse_mode="Markdown")
 
 @dp.callback_query(F.data == "main_admin")
 async def admin_panel(callback: types.CallbackQuery):
@@ -1660,21 +1659,47 @@ async def user_extend_days(callback: types.CallbackQuery, state: FSMContext):
     if not plan_type or not plan_name or not amount:
         logging.error(f"State data missing for user {user_id}: plan_type={plan_type}, plan_name={plan_name}, amount={amount}")
         await callback.answer("❌ Xatolik! Qayta urinib ko'ring.", show_alert=True)
+        await callback.message.answer("💎 **Obuna uzaytirish uchun reja tanlang:**", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔹 Start — 1 oy (50,000 so'm)", callback_data="extend_buy_start")],
+            [InlineKeyboardButton(text="🔹 Pro — 3 oy (120,000 so'm)", callback_data="extend_buy_3month")],
+            [InlineKeyboardButton(text="🔹 Pro — 6 oy (200,000 so'm)", callback_data="extend_buy_pro")],
+            [InlineKeyboardButton(text="🔹 VIP — 1 yil (350,000 so'm)", callback_data="extend_buy_year")],
+            [InlineKeyboardButton(text="🔹 VIP — Umrbod (500,000 so'm)", callback_data="extend_buy_vip")],
+            [InlineKeyboardButton(text="🔙 Bekor qilish", callback_data="main_settings")]
+        ]), parse_mode="Markdown")
         return
     
     await state.update_data(plan_type=plan_type, plan_name=plan_name, days=days, amount=amount)
     
-    text = (
-        f"💳 **To'lov Tizimi**\n\n"
-        f"📦 Tanlangan reja: **{plan_name}**\n"
-        f"💰 Summa: **{amount:,} so'm**\n\n"
-        f"📝 **To'lov qilish:**\n"
-        f"1. Quyidagi raqamga pul o'tkazing\n"
-        f"2. Chekni rasm sifatida yuboring\n"
-        f"3. Admin tasdiqlashi kutib turing\n\n"
-        f"👤 Admin: @admin_username\n"
-        f"💳 Karta: 9860 12XX XXXX XXXX"
-    )
+    # Admin panel'dan to'lov ma'lumotlarini olish
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT card_number, card_holder, amount FROM payment_info ORDER BY created_at DESC LIMIT 1") as cursor:
+            payment_row = await cursor.fetchone()
+    
+    if payment_row:
+        card_number, card_holder, payment_amount = payment_row
+        text = (
+            f"💳 **To'lov Tizimi**\n\n"
+            f"📦 Tanlangan reja: **{plan_name}**\n"
+            f"💰 Summa: **{amount:,} so'm**\n\n"
+            f"📝 **To'lov qilish:**\n"
+            f"1. Quyidagi karta raqamiga pul o'tkazing\n"
+            f"2. Chekni rasm sifatida yuboring\n"
+            f"3. Admin tasdiqlashi kutib turing\n\n"
+            f"💳 **Karta raqami:** `{card_number}`\n"
+            f"👤 **Karta egasi:** `{card_holder}`"
+        )
+    else:
+        text = (
+            f"💳 **To'lov Tizimi**\n\n"
+            f"📦 Tanlangan reja: **{plan_name}**\n"
+            f"💰 Summa: **{amount:,} so'm**\n\n"
+            f"📝 **To'lov qilish:**\n"
+            f"1. Quyidagi raqamga pul o'tkazing\n"
+            f"2. Chekni rasm sifatida yuboring\n"
+            f"3. Admin tasdiqlashi kutib turing\n\n"
+            f"⚠️ To'lov ma'lumotlari hali kiritilmagan. Admin bilan bog'laning."
+        )
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📸 Chekni yuborish", callback_data=f"payment_screenshot_{plan_type}")],
@@ -1964,13 +1989,17 @@ async def add_admin_prompt(callback: types.CallbackQuery, state: FSMContext):
         await callback.answer("❌ Siz admin emassiz!", show_alert=True)
         return
     
+    logging.info(f"Admin add prompt triggered by {callback.from_user.id}")
     await callback.message.answer("👨‍💼 **Yangi admin qo'shish**\n\nAdmin ID raqamini kiriting:")
     await state.set_state(AuthState.add_admin_id)
     await callback.answer()
 
 @dp.message(AuthState.add_admin_id)
 async def process_add_admin(message: types.Message, state: FSMContext):
-    if not await is_admin(message.from_user.id):
+    user_id = message.from_user.id
+    logging.info(f"Admin add message received from {user_id}: {message.text}")
+    
+    if not await is_admin(user_id):
         await message.answer("❌ Siz admin emassiz!")
         await state.clear()
         return
