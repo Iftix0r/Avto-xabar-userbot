@@ -339,11 +339,15 @@ async def process_auth_step(message: types.Message, state: FSMContext):
     client = users_data[user_id]['client']
     
     async def finish_auth():
+        # Clientni _active_clients ga saqlash
+        session_key = f"sess_{user_id}"
+        _active_clients[session_key] = client
+        
         is_sub = await check_subscription(user_id)
         if is_sub:
             await message.answer("✅ Muvaffaqiyatli ulandi!", reply_markup=get_main_keyboard(user_id, is_connected=True))
         else:
-            await message.answer("✅ Akkount muvaffaqiyatli ulandi!", reply_markup=get_main_keyboard(user_id, is_connected=True))
+            await message.answer("✅ Akkount muvaffaqiyatli ulandi!")
             await send_sub_msg(message)
         await state.clear()
 
@@ -371,6 +375,17 @@ async def process_auth_step(message: types.Message, state: FSMContext):
 async def buy_subscription(callback: types.CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
     client = await get_user_client(user_id)
+    
+    # Fallback: users_data dan tekshirish
+    if not client and user_id in users_data and 'client' in users_data[user_id]:
+        client = users_data[user_id]['client']
+        try:
+            if client.is_connected() and await client.is_user_authorized():
+                _active_clients[f"sess_{user_id}"] = client
+            else:
+                client = None
+        except Exception:
+            client = None
     
     if not client:
         await callback.answer("❌ Avval akkauntingizni ulashingiz kerak!", show_alert=True)
@@ -487,9 +502,17 @@ async def process_payment_screenshot(message: types.Message, state: FSMContext):
         
     for a_id in admin_ids:
         try:
-            await bot.send_message(a_id, admin_text, reply_markup=kb, parse_mode="Markdown")
+            # Chek rasmini adminga yuborish
+            from aiogram.types import FSInputFile
+            screenshot_file = FSInputFile(file_path)
+            await bot.send_photo(a_id, photo=screenshot_file, caption=admin_text, reply_markup=kb, parse_mode="Markdown")
         except Exception as e:
             logging.error(f"Error sending payment to admin {a_id}: {e}")
+            # Agar rasm yuborilmasa, matn yuborish
+            try:
+                await bot.send_message(a_id, admin_text, reply_markup=kb, parse_mode="Markdown")
+            except Exception as e2:
+                logging.error(f"Error sending text to admin {a_id}: {e2}")
     
     await state.clear()
 
@@ -514,10 +537,17 @@ async def approve_payment(callback: types.CallbackQuery):
     days = plan_days.get(plan_type, 30)
     await add_subscription(user_id, days, plan_type)
     
-    # Foydalanuvchiga xabar
+    # Foydalanuvchiga xabar va asosiy menyuni yuborish
     await bot.send_message(user_id, "✅ **To'lovingiz tasdiqlandi!**\n\nObunangiz faollashtirildi. Botdan foydalanishni boshlashingiz mumkin.", parse_mode="Markdown")
+    await bot.send_message(user_id, "🏠 **Asosiy boshqaruv paneli:**", reply_markup=get_main_keyboard(user_id, is_connected=True), parse_mode="Markdown")
     
-    await callback.message.edit_text("✅ To'lov tasdiqlandi!", reply_markup=None)
+    try:
+        await callback.message.edit_caption(caption="✅ To'lov tasdiqlandi!", reply_markup=None)
+    except Exception:
+        try:
+            await callback.message.edit_text("✅ To'lov tasdiqlandi!", reply_markup=None)
+        except Exception:
+            await callback.message.answer("✅ To'lov tasdiqlandi!")
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("reject_payment_"))
@@ -529,7 +559,13 @@ async def reject_payment(callback: types.CallbackQuery):
     user_id = int(callback.data.split("_")[-1])
     
     await bot.send_message(user_id, "❌ **To'lovingiz rad etildi.**\n\nIltimos, admin bilan bog'laning.", parse_mode="Markdown")
-    await callback.message.edit_text("❌ To'lov rad etildi!", reply_markup=None)
+    try:
+        await callback.message.edit_caption(caption="❌ To'lov rad etildi!", reply_markup=None)
+    except Exception:
+        try:
+            await callback.message.edit_text("❌ To'lov rad etildi!", reply_markup=None)
+        except Exception:
+            await callback.message.answer("❌ To'lov rad etildi!")
     await callback.answer()
 
 @dp.callback_query(F.data == "cancel_payment")
