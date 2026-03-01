@@ -1258,9 +1258,9 @@ async def start_sender(user_id):
                         filters = await client(GetDialogFiltersRequest())
                         for f in filters:
                             if hasattr(f, 'title') and f.title.lower() in user_folders:
+                                # Barcha dialog turlarini qo'shish (chat, group, channel, bot, user)
                                 async for dialog in client.iter_dialogs(folder=f.id):
-                                    if dialog.is_group or dialog.is_channel:
-                                        final_target_ids.add(dialog.id)
+                                    final_target_ids.add(dialog.id)
                     except Exception as e:
                         logging.error(f"Error getting DialogFilters: {e}")
 
