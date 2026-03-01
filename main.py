@@ -247,10 +247,18 @@ async def get_user_client(user_id, session_name=None):
             else:
                 await client.disconnect()
         except AuthKeyDuplicatedError:
-            logging.error(f"Duplicate session for {key}. Cleaning up.")
-            # Session is invalid, we might need to delete it but better let user relogin
+            logging.error(f"Duplicate session for {key}. Deleting corrupted session file.")
             try: await client.disconnect() 
             except: pass
+            
+            # Delete the corrupted session file
+            try:
+                if os.path.exists(session_path + ".session"):
+                    os.remove(session_path + ".session")
+                if os.path.exists(session_path + ".session-journal"):
+                    os.remove(session_path + ".session-journal")
+            except Exception as e:
+                logging.error(f"Failed to delete corrupted session {key}: {e}")
         except Exception as e:
             logging.error(f"Error connecting client {key}: {e}")
             try: await client.disconnect() 
