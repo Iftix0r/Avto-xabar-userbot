@@ -2274,34 +2274,56 @@ async def list_admins(callback: types.CallbackQuery):
 @dp.callback_query(F.data.startswith("remove_admin_"))
 async def process_remove_admin_callback(callback: types.CallbackQuery):
     """Inline tugma orqali admin o'chirish"""
-    if not await is_admin(callback.from_user.id):
-        await callback.answer("❌ Siz admin emassiz!", show_alert=True)
-        return
-    
     try:
-        remove_admin_id = int(callback.data.split("_")[-1])
-    except ValueError:
-        await callback.answer("❌ Xatolik!", show_alert=True)
-        return
-    
-    if remove_admin_id == ADMIN_ID:
-        await callback.answer("❌ Asosiy admin o'chirilmaydi!", show_alert=True)
-        return
-    
-    async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute("DELETE FROM admins WHERE admin_id = ?", (remove_admin_id,))
-        deleted = cursor.rowcount if hasattr(cursor, 'rowcount') else 1
-        await db.commit()
-    
-    if deleted > 0:
+        if not await is_admin(callback.from_user.id):
+            await callback.answer("❌ Siz admin emassiz!", show_alert=True)
+            return
+        
+        try:
+            remove_admin_id = int(callback.data.split("_")[-1])
+        except ValueError:
+            await callback.answer("❌ Xatolik! Admin ID noto'g'ri formatda.", show_alert=True)
+            return
+        
+        if remove_admin_id == ADMIN_ID:
+            await callback.answer("❌ Asosiy admin o'chirilmaydi!", show_alert=True)
+            return
+        
+        # Admin o'zini o'chirishga harakat qilmasligi kerak
+        if remove_admin_id == callback.from_user.id:
+            await callback.answer("❌ O'zingizni o'chira olmaysiz!", show_alert=True)
+            return
+        
+        async with aiosqlite.connect(DB_PATH) as db:
+            # Avval admin mavjudligini tekshirish
+            async with db.execute("SELECT admin_id FROM admins WHERE admin_id = ?", (remove_admin_id,)) as cursor:
+                exists = await cursor.fetchone()
+            
+            if not exists:
+                await callback.answer("❌ Admin topilmadi!", show_alert=True)
+                return
+            
+            # Oxirgi adminni o'chirishni tekshirish (asosiy admindan tashqari)
+            async with db.execute("SELECT COUNT(*) FROM admins") as cursor:
+                admin_count = (await cursor.fetchone())[0]
+            
+            if admin_count <= 1:
+                await callback.answer("❌ Oxirgi adminni o'chira olmaysiz!", show_alert=True)
+                return
+            
+            # Adminni o'chirish
+            await db.execute("DELETE FROM admins WHERE admin_id = ?", (remove_admin_id,))
+            await db.commit()
+        
         await callback.answer("✅ Admin o'chirildi!", show_alert=True)
         await callback.message.edit_text(
             f"✅ Admin `{remove_admin_id}` muvaffaqiyatli o'chirildi!\n\n"
             "👥 Admin ro'yxatini ko'rish uchun '👥 Admin ro'yxati' tugmasini bosing.",
             parse_mode="Markdown"
         )
-    else:
-        await callback.answer("❌ Admin topilmadi!", show_alert=True)
+    except Exception as e:
+        logging.error(f"Error in process_remove_admin_callback: {e}")
+        await callback.answer(f"❌ Xatolik: {str(e)[:50]}", show_alert=True)
 
 @dp.callback_query(F.data == "admin_remove_admin")
 async def remove_admin_prompt(callback: types.CallbackQuery, state: FSMContext):
@@ -2315,30 +2337,55 @@ async def remove_admin_prompt(callback: types.CallbackQuery, state: FSMContext):
 
 @dp.message(AuthState.remove_admin_id)
 async def process_remove_admin(message: types.Message, state: FSMContext):
-    if not await is_admin(message.from_user.id):
-        return
-    
     try:
-        remove_admin_id = int(message.text.strip())
-    except ValueError:
-        await message.answer("❌ Noto'g'ri format!")
-        return
-    
-    if remove_admin_id == ADMIN_ID:
-        await message.answer("❌ Asosiy admin'ni o'chira olmaysiz!")
-        await state.clear()
-        return
-    
-    async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute("DELETE FROM admins WHERE admin_id = ?", (remove_admin_id,))
-        deleted = cursor.rowcount if hasattr(cursor, 'rowcount') else 1
-        await db.commit()
-    
-    if deleted > 0:
+        if not await is_admin(message.from_user.id):
+            return
+        
+        try:
+            remove_admin_id = int(message.text.strip())
+        except ValueError:
+            await message.answer("❌ Noto'g'ri format! Faqat raqam kiriting.")
+            return
+        
+        if remove_admin_id == ADMIN_ID:
+            await message.answer("❌ Asosiy admin'ni o'chira olmaysiz!")
+            await state.clear()
+            return
+        
+        # Admin o'zini o'chira olmasligi kerak
+        if remove_admin_id == message.from_user.id:
+            await message.answer("❌ O'zingizni o'chira olmaysiz!")
+            await state.clear()
+            return
+        
+        async with aiosqlite.connect(DB_PATH) as db:
+            # Avval admin mavjudligini tekshirish
+            async with db.execute("SELECT admin_id FROM admins WHERE admin_id = ?", (remove_admin_id,)) as cursor:
+                exists = await cursor.fetchone()
+            
+            if not exists:
+                await message.answer(f"❌ Admin `{remove_admin_id}` topilmadi!", parse_mode="Markdown")
+                await state.clear()
+                return
+            
+            # Oxirgi adminni o'chirishni tekshirish (asosiy admindan tashqari)
+            async with db.execute("SELECT COUNT(*) FROM admins") as cursor:
+                admin_count = (await cursor.fetchone())[0]
+            
+            if admin_count <= 1:
+                await message.answer("❌ Oxirgi adminni o'chira olmaysiz!", parse_mode="Markdown")
+                await state.clear()
+                return
+            
+            # Adminni o'chirish
+            await db.execute("DELETE FROM admins WHERE admin_id = ?", (remove_admin_id,))
+            await db.commit()
+        
         await message.answer(f"✅ Admin `{remove_admin_id}` o'chirildi!", parse_mode="Markdown")
-    else:
-        await message.answer(f"❌ Admin `{remove_admin_id}` topilmadi!", parse_mode="Markdown")
-    await state.clear()
+        await state.clear()
+    except Exception as e:
+        logging.error(f"Error in process_remove_admin: {e}")
+        await message.answer(f"❌ Xatolik yuz berdi: {str(e)[:50]}")
 
 # --- Admin Tekshirish (boshida ta'riflanadi) ---
 
