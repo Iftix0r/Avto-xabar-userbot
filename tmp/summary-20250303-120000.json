@@ -1,0 +1,4 @@
+{
+  "summary": "Profil bo'limi, obuna so'rovi, to'lov ma'lumotlari, narx sozlash va admin o'chirish bo'yicha o'zgarishlar kiritildi. Profilda client None bo'lganda xato bartaraf etildi; obuna so'rovi request_id bilan kuzatiladi; to'lov ma'lumotlari uchun alohida AuthState.edit_payment_info qo'shildi (broadcast bilan conflict olib tashlandi); narx sozlash va admin ro'yxati uchun inline tugmalar qo'shildi; admin o'chirish har bir admin yonida 'O'chirish' tugmasi bilan ishlaydi. Obuna narxlari endi bazadan olinadi.",
+  "current_status": "Barcha qo'yilgan vazifalar bajarildi. Bot profil, obuna, to'lov, narx va admin boshqaruvini to'g'ri ishlatishi kerak. Keyingi qadam: botni ishga tushirib real test qilish."
+}

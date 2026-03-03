@@ -47,6 +47,7 @@ class AuthState(StatesGroup):
     add_group_ids = State()
     add_admin_id = State()
     remove_admin_id = State()
+    edit_payment_info = State()
 
 # --- Ma'lumotlar bazasi ---
 async def init_db():
@@ -243,7 +244,7 @@ async def get_main_keyboard(user_id, is_connected=False):
     
     # Agar obuna yo'q bo'lsa va admin bo'lmasa, faqat obuna tugmasini qaytaramiz (aslida bu start_handlerda boshqariladi)
     if not has_sub and not is_admin_user:
-        return get_subscription_keyboard()
+        return await get_subscription_keyboard()
 
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
@@ -252,27 +253,47 @@ async def admin_panel_text_btn(message: types.Message):
     if await is_admin(message.from_user.id):
         await show_admin_panel(message)
 
-def get_subscription_keyboard():
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔹 Start — 1 oy (50,000 so'm)", callback_data="buy_start")],
-        [InlineKeyboardButton(text="🔹 Pro — 3 oy (120,000 so'm)", callback_data="buy_3month")],
-        [InlineKeyboardButton(text="🔹 Pro — 6 oy (200,000 so'm)", callback_data="buy_pro_plan")],
-        [InlineKeyboardButton(text="🔹 VIP — 1 yil (350,000 so'm)", callback_data="buy_year")],
-        [InlineKeyboardButton(text="🔹 VIP — Umrbod (500,000 so'm)", callback_data="buy_vip")],
-        [InlineKeyboardButton(text="👤 Admin bilan bog'lanish", url=f"tg://user?id={ADMIN_ID}")]
-    ])
+async def get_subscription_keyboard():
+    """Bazadagi narxlardan obuna tugmalarini yaratadi"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT plan_type, duration_days, price FROM pricing ORDER BY duration_days") as cursor:
+            prices = await cursor.fetchall()
+    
+    plan_buttons = {
+        "start": "buy_start",
+        "3month": "buy_3month",
+        "pro": "buy_pro_plan",
+        "year": "buy_year",
+        "vip": "buy_vip",
+    }
+    plan_labels = {
+        "start": "Start — 1 oy",
+        "3month": "Pro — 3 oy",
+        "pro": "Pro — 6 oy",
+        "year": "VIP — 1 yil",
+        "vip": "VIP — Umrbod",
+    }
+    kb = []
+    for plan_type, days, price in prices:
+        if plan_type in plan_buttons:
+            kb.append([InlineKeyboardButton(
+                text=f"🔹 {plan_labels[plan_type]} ({price:,} so'm)",
+                callback_data=plan_buttons[plan_type]
+            )])
+    kb.append([InlineKeyboardButton(text="👤 Admin bilan bog'lanish", url=f"tg://user?id={ADMIN_ID}")])
+    return InlineKeyboardMarkup(inline_keyboard=kb)
 
 async def send_sub_msg(message: types.Message):
-    text = (
-        "🔥 **Obuna turlarini tanlang:**\n\n"
-        "🔹 Start — 1 oy: 50 000 so'm\n"
-        "🔹 Pro — 3 oy: 120 000 so'm\n"
-        "🔹 Pro — 6 oy: 200 000 so'm\n"
-        "🔹 VIP — 1 yil: 350 000 so'm\n"
-        "🔹 VIP — Umrbod: 500 000 so'm\n\n"
-        "⏱ Istalgan vaqtda, istalgan guruhga, istagan e'loningizni avtomatik yuboradi!"
-    )
-    await message.answer(text, reply_markup=get_subscription_keyboard(), parse_mode="Markdown")
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT plan_type, duration_days, price FROM pricing ORDER BY duration_days") as cursor:
+            prices = await cursor.fetchall()
+    plan_names = {"start": "Start — 1 oy", "3month": "Pro — 3 oy", "pro": "Pro — 6 oy", "year": "VIP — 1 yil", "vip": "VIP — Umrbod"}
+    text = "🔥 **Obuna turlarini tanlang:**\n\n"
+    for plan, days, price in prices:
+        if plan in plan_names:
+            text += f"🔹 {plan_names[plan]}: {price:,} so'm\n"
+    text += "\n⏱ Istalgan vaqtda, istalgan guruhga, istagan e'loningizni avtomatik yuboradi!"
+    await message.answer(text, reply_markup=await get_subscription_keyboard(), parse_mode="Markdown")
 
 # --- Client Helper ---
 _active_clients = {}
@@ -367,7 +388,7 @@ async def start_handler(message: types.Message):
         await message.answer("🏠 **Asosiy boshqaruv paneli:**", reply_markup=await get_main_keyboard(user_id, is_connected=True), parse_mode="Markdown")
     else:
         # Obuna yo'q, lekin admin bo'lsa admin panel tugmasini qo'shib ko'rsatamiz
-        kb = get_subscription_keyboard()
+        kb = await get_subscription_keyboard()
         if is_admin_user:
             # Admin uchun obuna xabari tagiga admin panel tugmasini qo'shamiz
             new_kb = []
@@ -630,11 +651,13 @@ async def process_payment_screenshot(message: types.Message, state: FSMContext):
     logging.info(f"Screenshot saved to {file_path}")
     
     # To'lov so'rovini bazaga qo'shish
+    request_id = None
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("""
+        cursor = await db.execute("""
             INSERT INTO payment_requests (user_id, plan_type, amount, screenshot_path, status, created_at)
             VALUES (?, ?, ?, ?, 'pending', ?)
         """, (user_id, data.get('plan_type'), data.get('amount'), file_path, datetime.now().isoformat()))
+        request_id = cursor.lastrowid
         await db.commit()
     
     # Foydalanuvchiga xabar
@@ -673,9 +696,11 @@ async def process_payment_screenshot(message: types.Message, state: FSMContext):
         f"✅ Tasdiqlash uchun quyidagi tugmani bosing:"
     )
     
+    # Request ID bilan unique callback (bir xil user bir necha marta yuborganda ham)
+    req_id = request_id or 0
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Tasdiqlash", callback_data=f"approve_payment_{user_id}_{data.get('plan_type', 'none')}")],
-        [InlineKeyboardButton(text="❌ Rad etish", callback_data=f"reject_payment_{user_id}")]
+        [InlineKeyboardButton(text="✅ Tasdiqlash", callback_data=f"approve_payment_{req_id}_{user_id}_{data.get('plan_type', 'none')}")],
+        [InlineKeyboardButton(text="❌ Rad etish", callback_data=f"reject_payment_{req_id}_{user_id}")]
     ])
     
     # Barcha adminlarga xabar yuborish
@@ -715,8 +740,12 @@ async def approve_payment(callback: types.CallbackQuery):
         return
     
     parts = callback.data.split("_")
-    user_id = int(parts[2])
-    plan_type = parts[3]
+    # Format: approve_payment_{request_id}_{user_id}_{plan_type} yoki eski: approve_payment_{user_id}_{plan_type}
+    if len(parts) >= 5:
+        request_id, user_id, plan_type = int(parts[2]), int(parts[3]), parts[4]
+    else:
+        user_id, plan_type = int(parts[2]), parts[3]
+        request_id = None
     
     plan_days = {
         "start": 30,
@@ -728,6 +757,12 @@ async def approve_payment(callback: types.CallbackQuery):
     
     days = plan_days.get(plan_type, 30)
     await add_subscription(user_id, days, plan_type)
+    
+    # payment_requests statusni yangilash
+    if request_id:
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("UPDATE payment_requests SET status = 'approved' WHERE id = ?", (request_id,))
+            await db.commit()
     
     # Foydalanuvchiga xabar va asosiy menyuni yuborish
     await bot.send_message(user_id, "✅ **To'lovingiz tasdiqlandi!**\n\nObunangiz faollashtirildi. Botdan foydalanishni boshlashingiz mumkin.", parse_mode="Markdown")
@@ -748,7 +783,16 @@ async def reject_payment(callback: types.CallbackQuery):
         await callback.answer("❌ Siz admin emassiz!", show_alert=True)
         return
     
-    user_id = int(callback.data.split("_")[-1])
+    parts = callback.data.split("_")
+    # Format: reject_payment_{request_id}_{user_id} yoki eski: reject_payment_{user_id}
+    if len(parts) >= 4:
+        request_id, user_id = int(parts[2]), int(parts[3])
+        if request_id:
+            async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("UPDATE payment_requests SET status = 'rejected' WHERE id = ?", (request_id,))
+                await db.commit()
+    else:
+        user_id = int(parts[-1])
     
     await bot.send_message(user_id, "❌ **To'lovingiz rad etildi.**\n\nIltimos, admin bilan bog'laning.", parse_mode="Markdown")
     try:
@@ -762,7 +806,7 @@ async def reject_payment(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data == "cancel_payment")
 async def cancel_payment(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.answer("❌ To'lov bekor qilindi.", reply_markup=get_subscription_keyboard())
+    await callback.message.answer("❌ To'lov bekor qilindi.", reply_markup=await get_subscription_keyboard())
     await state.clear()
     await callback.answer()
 
@@ -1344,7 +1388,12 @@ async def start_sender(user_id):
 async def show_profile(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     client = await get_user_client(user_id)
-    me = await client.get_me() if client else None
+    me = None
+    if client:
+        try:
+            me = await client.get_me()
+        except Exception as e:
+            logging.error(f"Error getting user info: {e}")
     
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("SELECT expiry_date FROM subscriptions WHERE user_id = ?", (user_id,)) as cursor:
@@ -1352,10 +1401,24 @@ async def show_profile(callback: types.CallbackQuery):
     
     expiry = row[0] if row else "Obuna yo'q"
     
+    # Ism va username - Telethon yoki users jadvalidan
+    display_name = "Noma'lum"
+    display_username = "yo'q"
+    if me:
+        display_name = me.first_name or "Noma'lum"
+        display_username = f"@{me.username}" if me.username else "yo'q"
+    else:
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute("SELECT full_name, username FROM users WHERE user_id = ?", (user_id,)) as cur:
+                urow = await cur.fetchone()
+        if urow and urow[0]:
+            display_name = urow[0]
+            display_username = f"@{urow[1]}" if urow[1] else "yo'q"
+    
     text = (
         f"👤 **Foydalanuvchi ma'lumotlari**\n\n"
-        f"🔹 Ism: **{me.first_name if me else 'Noma`lum'}**\n"
-        f"🔹 Username: @{me.username if me and me.username else 'yo`q'}\n"
+        f"🔹 Ism: **{display_name}**\n"
+        f"🔹 Username: {display_username}\n"
         f"🔹 Telegram ID: `{user_id}`\n"
         f"🔹 Obuna: **{expiry}**"
     )
@@ -1386,16 +1449,18 @@ async def user_extend_sub(callback: types.CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
     await state.update_data(extend_user_id=user_id)
     
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔹 Start — 1 oy (50,000 so'm)", callback_data="extend_buy_start")],
-        [InlineKeyboardButton(text="🔹 Pro — 3 oy (120,000 so'm)", callback_data="extend_buy_3month")],
-        [InlineKeyboardButton(text="🔹 Pro — 6 oy (200,000 so'm)", callback_data="extend_buy_pro")],
-        [InlineKeyboardButton(text="🔹 VIP — 1 yil (350,000 so'm)", callback_data="extend_buy_year")],
-        [InlineKeyboardButton(text="🔹 VIP — Umrbod (500,000 so'm)", callback_data="extend_buy_vip")],
-        [InlineKeyboardButton(text="🔙 Bekor qilish", callback_data="main_settings")]
-    ])
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT plan_type, duration_days, price FROM pricing ORDER BY duration_days") as cursor:
+            prices = await cursor.fetchall()
+    plan_btn = {"start": "extend_buy_start", "3month": "extend_buy_3month", "pro": "extend_buy_pro", "year": "extend_buy_year", "vip": "extend_buy_vip"}
+    plan_names = {"start": "Start — 1 oy", "3month": "Pro — 3 oy", "pro": "Pro — 6 oy", "year": "VIP — 1 yil", "vip": "VIP — Umrbod"}
+    kb = []
+    for plan, days, price in prices:
+        if plan in plan_btn:
+            kb.append([InlineKeyboardButton(text=f"🔹 {plan_names[plan]} ({price:,} so'm)", callback_data=plan_btn[plan])])
+    kb.append([InlineKeyboardButton(text="🔙 Bekor qilish", callback_data="main_settings")])
     
-    await callback.message.answer("💎 **Obuna uzaytirish uchun reja tanlang:**", reply_markup=kb, parse_mode="Markdown")
+    await callback.message.answer("💎 **Obuna uzaytirish uchun reja tanlang:**", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb), parse_mode="Markdown")
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("extend_buy_"))
@@ -1598,14 +1663,20 @@ async def admin_pricing_msg(message: types.Message):
         return
     
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute("SELECT plan_type, duration_days, price FROM pricing") as cursor:
+        async with db.execute("SELECT plan_type, duration_days, price FROM pricing ORDER BY duration_days") as cursor:
             prices = await cursor.fetchall()
     
-    text = "💰 **Narxlar:**\n\n"
+    text = "💰 **Obuna Narxlari**\n\n"
     for plan, days, price in prices:
-        text += f"🔹 {plan}: {days} kun = {price:,} so'm\n"
+        dur = "Umrbod" if days == 9999 else f"{days} kun"
+        text += f"🔹 {plan.upper()}: {price:,} so'm ({dur})\n"
+    text += "\n✏️ Narxni o'zgartirish uchun tugmani bosing:"
     
-    await message.answer(text, parse_mode="Markdown")
+    kb = []
+    for plan, days, price in prices:
+        kb.append([InlineKeyboardButton(text=f"✏️ {plan.upper()}", callback_data=f"edit_price_{plan}")])
+    
+    await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb), parse_mode="Markdown")
 
 @dp.message(F.text == "📢 Xabar yuborish")
 async def admin_broadcast_msg(message: types.Message, state: FSMContext):
@@ -1692,16 +1763,20 @@ async def list_admins_msg(message: types.Message):
     text += f"👑 Asosiy Admin: `{ADMIN_ID}`\n\n"
     
     if admins:
+        text += "**Qo'shimcha Adminlar:**\n"
+        kb = []
         for admin_id, created_at in admins:
             if created_at:
-                date = created_at.split()[0] if isinstance(created_at, str) else str(created_at).split()[0]
-                text += f"🔹 `{admin_id}` ({date})\n"
+                date = created_at.split("T")[0] if isinstance(created_at, str) else str(created_at).split("T")[0]
+                text += f"🔹 `{admin_id}` (Qo'shilgan: {date})\n"
             else:
                 text += f"🔹 `{admin_id}` (Sana noma'lum)\n"
+            kb.append([InlineKeyboardButton(text=f"🗑 O'chirish {admin_id}", callback_data=f"remove_admin_{admin_id}")])
+        kb.append([InlineKeyboardButton(text="🔙 Orqaga", callback_data="main_admin")])
     else:
         text += "Qo'shimcha adminlar yo'q"
-    
-    await message.answer(text, parse_mode="Markdown")
+        kb = [[InlineKeyboardButton(text="🔙 Orqaga", callback_data="main_admin")]]
+    await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb), parse_mode="Markdown")
 
 @dp.message(F.text == "📱 Akkauntga ulanish")
 async def admin_connect_account_msg(message: types.Message, state: FSMContext):
@@ -2013,31 +2088,34 @@ async def admin_payment_info(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
 
 @dp.callback_query(F.data == "edit_payment_info")
-async def edit_payment_info(callback: types.CallbackQuery, state: FSMContext):
+async def edit_payment_info_callback(callback: types.CallbackQuery, state: FSMContext):
     if not await is_admin(callback.from_user.id):
         await callback.answer("❌ Siz admin emassiz!", show_alert=True)
         return
     
     await callback.message.answer(
         "💳 **To'lov ma'lumotlarini kiriting**\n\n"
-        "Quyidagi formatda yuboring:\n"
-        "`9860 1234 5678 9012`\n"
-        "`Ism Familiya`\n"
-        "`50000`\n\n"
-        "Birinchi qator: Karta raqami\n"
-        "Ikkinchi qator: Karta egasi\n"
-        "Uchinchi qator: Summa (so'm)",
+        "Quyidagi formatda yuboring (har biri alohida qatorda):\n"
+        "`9860 1234 5678 9012` — Karta raqami\n"
+        "`Ism Familiya` — Karta egasi\n"
+        "`50000` — Summa (so'm)\n\n"
+        "Bekor qilish uchun /cancel yuboring.",
         parse_mode="Markdown"
     )
-    await state.set_state(AuthState.admin_broadcast_message)
+    await state.set_state(AuthState.edit_payment_info)
     await callback.answer()
 
-@dp.message(AuthState.admin_broadcast_message)
+@dp.message(AuthState.edit_payment_info)
 async def process_payment_info(message: types.Message, state: FSMContext):
     if not await is_admin(message.from_user.id):
         return
     
-    lines = message.text.strip().split('\n')
+    if message.text and message.text.strip() == "/cancel":
+        await state.clear()
+        await message.answer("❌ Bekor qilindi.")
+        return
+    
+    lines = message.text.strip().split('\n') if message.text else []
     if len(lines) < 3:
         await message.answer("❌ Noto'g'ri format! 3 ta qator kerak.")
         return
@@ -2097,13 +2175,13 @@ if __name__ == "__main__":
 
 @dp.callback_query(F.data == "buy_pro_menu")
 async def buy_pro_menu_handler(callback: types.CallbackQuery):
-    await callback.message.edit_text("💎 **Obuna bo'lish uchun reja tanlang:**", reply_markup=get_subscription_keyboard(), parse_mode="Markdown")
+    await callback.message.edit_text("💎 **Obuna bo'lish uchun reja tanlang:**", reply_markup=await get_subscription_keyboard(), parse_mode="Markdown")
     await callback.answer()
 
 @dp.callback_query(F.data == "buy_pro")
 async def buy_pro_handler(callback: types.CallbackQuery):
     """Settings'dan obuna uzaytirish uchun"""
-    await callback.message.answer("💎 **Obuna bo'lish uchun reja tanlang:**", reply_markup=get_subscription_keyboard(), parse_mode="Markdown")
+    await callback.message.answer("💎 **Obuna bo'lish uchun reja tanlang:**", reply_markup=await get_subscription_keyboard(), parse_mode="Markdown")
     await callback.answer()
 
 @dp.message(Command("cancel"))
@@ -2185,6 +2263,38 @@ async def list_admins(callback: types.CallbackQuery):
     
     await callback.message.answer(text, reply_markup=kb, parse_mode="Markdown")
     await callback.answer()
+
+@dp.callback_query(F.data.startswith("remove_admin_"))
+async def process_remove_admin_callback(callback: types.CallbackQuery):
+    """Inline tugma orqali admin o'chirish"""
+    if not await is_admin(callback.from_user.id):
+        await callback.answer("❌ Siz admin emassiz!", show_alert=True)
+        return
+    
+    try:
+        remove_admin_id = int(callback.data.split("_")[-1])
+    except ValueError:
+        await callback.answer("❌ Xatolik!", show_alert=True)
+        return
+    
+    if remove_admin_id == ADMIN_ID:
+        await callback.answer("❌ Asosiy admin o'chirilmaydi!", show_alert=True)
+        return
+    
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("DELETE FROM admins WHERE admin_id = ?", (remove_admin_id,))
+        deleted = cursor.rowcount if hasattr(cursor, 'rowcount') else 1
+        await db.commit()
+    
+    if deleted > 0:
+        await callback.answer("✅ Admin o'chirildi!", show_alert=True)
+        await callback.message.edit_text(
+            f"✅ Admin `{remove_admin_id}` muvaffaqiyatli o'chirildi!\n\n"
+            "👥 Admin ro'yxatini ko'rish uchun '👥 Admin ro'yxati' tugmasini bosing.",
+            parse_mode="Markdown"
+        )
+    else:
+        await callback.answer("❌ Admin topilmadi!", show_alert=True)
 
 @dp.callback_query(F.data == "admin_remove_admin")
 async def remove_admin_prompt(callback: types.CallbackQuery, state: FSMContext):
