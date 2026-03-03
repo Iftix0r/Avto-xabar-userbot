@@ -234,9 +234,9 @@ async def get_main_keyboard(user_id, is_connected=False):
     if has_sub:
         kb.extend([
             [InlineKeyboardButton(text="👥 Profillar", callback_data="main_profillar"), InlineKeyboardButton(text="💬 Xabar matni", callback_data="main_xabar")],
-            [InlineKeyboardButton(text="📋 Guruhlar", callback_data="main_groups"), InlineKeyboardButton(text="📊 Statistika", callback_data="main_stats")],
-            [InlineKeyboardButton(text="▶️ Ishga tushirish", callback_data="main_start_sender"), InlineKeyboardButton(text="⏱ Interval", callback_data="main_interval")],
-            [InlineKeyboardButton(text="👤 Profil", callback_data="main_profile"), InlineKeyboardButton(text="⚙️ Sozlamalar", callback_data="main_settings")]
+            [InlineKeyboardButton(text="📋 Guruhlar", callback_data="main_groups"), InlineKeyboardButton(text="▶️ Ishga tushirish", callback_data="main_start_sender")],
+            [InlineKeyboardButton(text="⏱ Interval", callback_data="main_interval"), InlineKeyboardButton(text="👤 Profil", callback_data="main_profile")],
+            [InlineKeyboardButton(text="⚙️ Sozlamalar", callback_data="main_settings")]
         ])
     
     if is_admin_user:
@@ -1401,19 +1401,26 @@ async def show_profile(callback: types.CallbackQuery):
     
     expiry = row[0] if row else "Obuna yo'q"
     
-    # Ism va username - Telethon yoki users jadvalidan
+    # Ism va username - Telethon, users jadvali yoki callback dan
     display_name = "Noma'lum"
     display_username = "yo'q"
+    
     if me:
         display_name = me.first_name or "Noma'lum"
         display_username = f"@{me.username}" if me.username else "yo'q"
     else:
+        # Avval users jadvalidan tekshirish
         async with aiosqlite.connect(DB_PATH) as db:
             async with db.execute("SELECT full_name, username FROM users WHERE user_id = ?", (user_id,)) as cur:
                 urow = await cur.fetchone()
+        
         if urow and urow[0]:
             display_name = urow[0]
             display_username = f"@{urow[1]}" if urow[1] else "yo'q"
+        else:
+            # Agar bazada yo'q bo'lsa, callback dan olish
+            display_name = callback.from_user.full_name or "Noma'lum"
+            display_username = f"@{callback.from_user.username}" if callback.from_user.username else "yo'q"
     
     text = (
         f"👤 **Foydalanuvchi ma'lumotlari**\n\n"
@@ -2323,10 +2330,14 @@ async def process_remove_admin(message: types.Message, state: FSMContext):
         return
     
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("DELETE FROM admins WHERE admin_id = ?", (remove_admin_id,))
+        cursor = await db.execute("DELETE FROM admins WHERE admin_id = ?", (remove_admin_id,))
+        deleted = cursor.rowcount if hasattr(cursor, 'rowcount') else 1
         await db.commit()
     
-    await message.answer(f"✅ Admin `{remove_admin_id}` o'chirildi!", parse_mode="Markdown")
+    if deleted > 0:
+        await message.answer(f"✅ Admin `{remove_admin_id}` o'chirildi!", parse_mode="Markdown")
+    else:
+        await message.answer(f"❌ Admin `{remove_admin_id}` topilmadi!", parse_mode="Markdown")
     await state.clear()
 
 # --- Admin Tekshirish (boshida ta'riflanadi) ---
