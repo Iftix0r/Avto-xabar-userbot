@@ -45,6 +45,7 @@ class AuthState(StatesGroup):
     add_profile_code = State()
     add_group_name = State()
     add_group_ids = State()
+    create_group_folder_name = State()
     add_admin_id = State()
     remove_admin_id = State()
     edit_payment_info = State()
@@ -982,7 +983,8 @@ async def show_groups(callback: types.CallbackQuery):
             text += f"{idx}. 📁 {folder_name} ({count} guruh)\n"
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="➕ Folder qo'shish", callback_data="add_group")],
+        [InlineKeyboardButton(text="🆕 Yangi folder ochish", callback_data="create_group_folder")],
+        [InlineKeyboardButton(text="📥 Mavjud folderni qo'shish", callback_data="import_group_folder")],
         [InlineKeyboardButton(text="🗑 Folder o'chirish", callback_data="delete_group")],
         [InlineKeyboardButton(text="🔙 Orqaga", callback_data="main_profile")]
     ])
@@ -1017,6 +1019,149 @@ async def process_delete_group(callback: types.CallbackQuery):
         await db.commit()
     await callback.answer("✅ Folder o'chirildi!")
     await show_groups(callback)
+
+@dp.callback_query(F.data == "create_group_folder")
+async def create_group_prompt(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.answer("🆕 **Yangi folder yaratish**\n\nYaratmoqchi bo'lgan papka nomini kiriting (Bu papka Telegramingizda ham hosil bo'ladi):")
+    await state.set_state(AuthState.create_group_folder_name)
+    await callback.answer()
+
+@dp.message(AuthState.create_group_folder_name)
+async def process_create_folder_name(message: types.Message, state: FSMContext):
+    folder_name = message.text.strip()
+    user_id = message.from_user.id
+    client = await get_user_client(user_id)
+    if not client:
+        await message.answer("❌ Akkountga ulanmagan! Avval profil ulanishi kerak.")
+        await state.clear()
+        return
+
+    await message.answer("🔄 Telegramda papka yaratilmoqda...")
+    try:
+        from telethon.tl.functions.messages import GetDialogFiltersRequest, UpdateDialogFilterRequest
+        from telethon.tl.types import DialogFilter
+        
+        # Get existing filters to find a free ID
+        filters = await client(GetDialogFiltersRequest())
+        existing_ids = [f.id for f in filters if hasattr(f, 'id')]
+        new_id = 2 
+        while new_id in existing_ids:
+            new_id += 1
+            
+        # Create a basic folder in Telegram
+        # Added contacts=True to make it valid
+        await client(UpdateDialogFilterRequest(
+            id=new_id,
+            filter=DialogFilter(
+                id=new_id,
+                title=folder_name,
+                contacts=True,
+                non_contacts=False,
+                groups=False,
+                broadcasts=False,
+                bots=False,
+                exclude_muted=False,
+                exclude_read=False,
+                exclude_archived=False,
+                include_peers=[],
+                exclude_peers=[]
+            )
+        ))
+        
+        # Add to database
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("""
+                INSERT INTO groups (user_id, folder_name, group_ids, created_at)
+                VALUES (?, ?, ?, ?)
+            """, (user_id, folder_name, "", datetime.now().isoformat()))
+            await db.commit()
+            
+        await message.answer(
+            f"✅ Telegramda **{folder_name}** nomli yangi papka yaratildi va botga qo'shildi!\n\n"
+            f"📱 Endi Telegram ilovangizda ushbu papkaga chatlarni qo'shishingiz mumkin, bot ulardan foydalanadi.",
+            parse_mode="Markdown",
+            reply_markup=await get_main_keyboard(user_id, is_connected=True)
+        )
+        await state.clear()
+    except Exception as e:
+        logging.error(f"Error creating folder: {e}")
+        await message.answer(f"❌ Xatolik yuz berdi: {e}")
+        await state.clear()
+
+@dp.callback_query(F.data == "import_group_folder")
+async def import_group_folder(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    client = await get_user_client(user_id)
+    if not client:
+        await callback.answer("❌ Akkountga ulanmagan!", show_alert=True)
+        return
+    
+    try:
+        from telethon.tl.functions.messages import GetDialogFiltersRequest
+        filters = await client(GetDialogFiltersRequest())
+        kb = []
+        for f in filters:
+            if hasattr(f, 'title') and f.title:
+                kb.append([InlineKeyboardButton(text=f"📁 {f.title}", callback_data=f"import_folder_select_{f.id}")])
+        
+        if not kb:
+            await callback.answer("❌ Telegramda birorta ham papka topilmadi!", show_alert=True)
+            return
+
+        kb.append([InlineKeyboardButton(text="🔙 Orqaga", callback_data="main_groups")])
+        await callback.message.edit_text("📥 **Telegramdagi papkalaringiz:**\n\nBotga qo'shish uchun papkani tanlang:", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb), parse_mode="Markdown")
+    except Exception as e:
+        logging.error(f"Error listing folders: {e}")
+        await callback.answer(f"❌ Xatolik: {e}", show_alert=True)
+
+@dp.callback_query(F.data.startswith("import_folder_select_"))
+async def process_import_folder_select(callback: types.CallbackQuery):
+    try:
+        folder_id = int(callback.data.split("_")[-1])
+        user_id = callback.from_user.id
+        client = await get_user_client(user_id)
+        if not client:
+            await callback.answer("❌ Akkountga ulanmagan!", show_alert=True)
+            return
+
+        from telethon.tl.functions.messages import GetDialogFiltersRequest
+        filters = await client(GetDialogFiltersRequest())
+        target_filter = None
+        for f in filters:
+            if hasattr(f, 'id') and f.id == folder_id:
+                target_filter = f
+                break
+        
+        if not target_filter:
+            await callback.answer("❌ Papka topilmadi!", show_alert=True)
+            return
+        
+        folder_name = target_filter.title
+        await callback.message.edit_text(f"🔄 **{folder_name}** papkasidagi chatlar yig'ilmoqda...")
+        
+        found_groups = []
+        async for dialog in client.iter_dialogs(folder=folder_id):
+            found_groups.append(str(dialog.id))
+        
+        group_ids = ",".join(found_groups)
+        
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("""
+                INSERT INTO groups (user_id, folder_name, group_ids, created_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(user_id, folder_name) DO UPDATE SET group_ids = excluded.group_ids
+            """, (user_id, folder_name, group_ids, datetime.now().isoformat()))
+            await db.commit()
+        
+        await callback.message.edit_text(
+            f"✅ Folder muvaffaqiyatli qo'shildi: **{folder_name}**\n\n"
+            f"🔄 Telegramdan **{len(found_groups)}** ta chat aniqlandi va botga biriktirildi.",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Orqaga", callback_data="main_groups")]])
+        )
+    except Exception as e:
+        logging.error(f"Error importing folder: {e}")
+        await callback.answer(f"❌ Xatolik: {e}", show_alert=True)
 
 @dp.callback_query(F.data == "add_group")
 async def add_group_prompt(callback: types.CallbackQuery, state: FSMContext):
@@ -2252,6 +2397,7 @@ async def list_admins(callback: types.CallbackQuery):
     text = "👥 **Admin Ro'yxati**\n\n"
     text += f"👑 Asosiy Admin: `{ADMIN_ID}`\n\n"
     
+    kb_list = []
     if not admins:
         text += "Qo'shimcha adminlar yo'q."
     else:
@@ -2262,13 +2408,21 @@ async def list_admins(callback: types.CallbackQuery):
                 text += f"🔹 `{admin_id}` (Qo'shilgan: {date})\n"
             else:
                 text += f"🔹 `{admin_id}` (Sana noma'lum)\n"
+            kb_list.append([InlineKeyboardButton(text=f"🗑 O'chirish {admin_id}", callback_data=f"remove_admin_{admin_id}")])
     
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🗑 Admin o'chirish", callback_data="admin_remove_admin")],
-        [InlineKeyboardButton(text="🔙 Orqaga", callback_data="main_admin")]
-    ])
+    kb_list.append([InlineKeyboardButton(text="➕ Admin qo'shish", callback_data="admin_add_admin_btn")]) # Using a specific callback for clarity
+    kb_list.append([InlineKeyboardButton(text="🔙 Orqaga", callback_data="main_admin")])
     
-    await callback.message.answer(text, reply_markup=kb, parse_mode="Markdown")
+    await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_list), parse_mode="Markdown")
+    await callback.answer()
+
+@dp.callback_query(F.data == "admin_add_admin_btn")
+async def admin_add_admin_btn_handler(callback: types.CallbackQuery, state: FSMContext):
+    """Admin panel button to trigger add admin prompt"""
+    if not await is_admin(callback.from_user.id):
+        await callback.answer("❌ Siz admin emassiz!", show_alert=True)
+        return
+    await add_admin_prompt_msg(callback.message, state)
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("remove_admin_"))
