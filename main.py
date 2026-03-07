@@ -1055,6 +1055,7 @@ async def process_create_folder_name(message: types.Message, state: FSMContext):
             filter=DialogFilter(
                 id=new_id,
                 title=folder_name,
+                pinned_peers=[],
                 contacts=True,
                 non_contacts=False,
                 groups=False,
