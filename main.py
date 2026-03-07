@@ -811,6 +811,43 @@ async def cancel_payment(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.answer()
 
+async def get_filter_dialog_ids(client, filter_obj):
+    from telethon import utils
+    inc_peers = set(utils.get_peer_id(p) for p in getattr(filter_obj, 'include_peers', []))
+    exc_peers = set(utils.get_peer_id(p) for p in getattr(filter_obj, 'exclude_peers', []))
+    
+    found_ids = []
+    async for dialog in client.iter_dialogs():
+        entity = dialog.entity
+        if getattr(filter_obj, 'exclude_archived', False) and dialog.archived:
+            continue
+            
+        if not entity:
+            continue
+            
+        peer_id = utils.get_peer_id(entity)
+        if peer_id in exc_peers:
+            continue
+            
+        if peer_id in inc_peers:
+            found_ids.append(str(dialog.id))
+            continue
+            
+        is_contact = dialog.is_user and getattr(entity, 'contact', False)
+        is_non_contact = dialog.is_user and not getattr(entity, 'contact', False) and not getattr(entity, 'bot', False)
+        is_bot = dialog.is_user and getattr(entity, 'bot', False)
+        is_group = dialog.is_group
+        is_broadcast = dialog.is_channel and not dialog.is_group
+        
+        if (getattr(filter_obj, 'contacts', False) and is_contact) or \
+           (getattr(filter_obj, 'non_contacts', False) and is_non_contact) or \
+           (getattr(filter_obj, 'bots', False) and is_bot) or \
+           (getattr(filter_obj, 'groups', False) and is_group) or \
+           (getattr(filter_obj, 'broadcasts', False) and is_broadcast):
+            found_ids.append(str(dialog.id))
+            
+    return list(set(found_ids))
+
 # --- Profillar Tizimi ---
 @dp.callback_query(F.data == "main_profillar")
 async def show_profiles(callback: types.CallbackQuery):
@@ -1140,9 +1177,7 @@ async def process_import_folder_select(callback: types.CallbackQuery):
         folder_name = target_filter.title
         await callback.message.edit_text(f"🔄 **{folder_name}** papkasidagi chatlar yig'ilmoqda...")
         
-        found_groups = []
-        async for dialog in client.iter_dialogs(folder=folder_id):
-            found_groups.append(str(dialog.id))
+        found_groups = await get_filter_dialog_ids(client, target_filter)
         
         group_ids = ",".join(found_groups)
         
@@ -1188,8 +1223,7 @@ async def process_group_name(message: types.Message, state: FSMContext):
                     available_folders.append(f.title)
                     if f.title.lower() == folder_name.lower():
                         # Barcha dialog turlarini qo'shish (chat, group, channel, bot, user)
-                        async for dialog in client.iter_dialogs(folder=f.id):
-                            found_groups.append(str(dialog.id))
+                        found_groups = await get_filter_dialog_ids(client, f)
                         break
         except Exception as e:
             logging.error(f"Sync error: {e}")
@@ -1457,8 +1491,8 @@ async def start_sender(user_id):
                         for f in filters:
                             if hasattr(f, 'title') and f.title.lower() in user_folders:
                                 # Barcha dialog turlarini qo'shish (chat, group, channel, bot, user)
-                                async for dialog in client.iter_dialogs(folder=f.id):
-                                    final_target_ids.add(dialog.id)
+                                for _d_id in await get_filter_dialog_ids(client, f):
+                                    final_target_ids.add(int(_d_id))
                     except Exception as e:
                         logging.error(f"Error getting DialogFilters: {e}")
 
